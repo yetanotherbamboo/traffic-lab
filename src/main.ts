@@ -4,6 +4,7 @@ import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from './game/tes
 import { LaneGraph } from './sim/laneGraph';
 import { TrafficSim } from './sim/traffic';
 import { writeVehicleInstances } from './render/vehicles';
+import { JunctionProps } from './render/junctionProps';
 import { CameraController } from './input/cameraController';
 import { OrbitCamera } from './render/camera';
 import { Renderer } from './render/renderer';
@@ -35,6 +36,7 @@ const lanes = new LaneGraph(network);
 const sim = new TrafficSim(lanes, testSpawners(network), TEST_SEED);
 for (let i = 0; i < 900; i++) sim.step(SIM_STEP); // warm up 90 s so the streets aren't empty
 const vehicleData = new Float32Array(sim.capacity * LIT_STRIDE);
+const props = new JunctionProps(sim);
 
 let renderer: Renderer;
 function initGL(): void {
@@ -65,6 +67,7 @@ const loop = new FixedLoop(
     resize();
     camera.update(canvas.width / canvas.height);
     renderer.setVehicles(vehicleData, writeVehicleInstances(sim, alpha, vehicleData));
+    renderer.setProps(props.buffer, props.update());
     renderer.render(camera, canvas.width, canvas.height, time);
 
     if (frameDt > 0) fps += (1 / frameDt - fps) * 0.05;
@@ -74,7 +77,8 @@ const loop = new FixedLoop(
       hud.textContent =
         `${fps.toFixed(0)} fps · ${renderer.drawCalls} draws · ${canvas.width}×${canvas.height}\n` +
         `${city.lots.length} lots · city ${genMs.toFixed(0)} ms\n` +
-        `${sim.stats.vehicles} vehicles · avg ${(sim.stats.meanSpeed * 3.6).toFixed(0)} km/h · ${sim.stats.exited} done`;
+        `${sim.stats.vehicles} vehicles · avg ${(sim.stats.meanSpeed * 3.6).toFixed(0)} km/h · ` +
+        `${sim.stats.waiting} waiting · ${sim.stats.exited} done`;
     }
   },
 );

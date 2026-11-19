@@ -21,10 +21,13 @@ export function writeVehicleInstances(sim: TrafficSim, alpha: number, out: Float
     if (!sim.alive[i]) continue;
     const k = i * POSE_STRIDE, o = n * LIT_STRIDE;
     const c = colors[sim.color[i]! % colors.length]!;
-    out[o] = p0[k]! + (p1[k]! - p0[k]!) * alpha;
+    // Poses are front-bumper points; the car mesh is centred, so step back half a length.
+    const h = lerpAngle(p0[k + 3]!, p1[k + 3]!, alpha);
+    const half = sim.length[i]! / 2;
+    out[o] = p0[k]! + (p1[k]! - p0[k]!) * alpha - Math.cos(h) * half;
     out[o + 1] = p0[k + 1]! + (p1[k + 1]! - p0[k + 1]!) * alpha;
-    out[o + 2] = p0[k + 2]! + (p1[k + 2]! - p0[k + 2]!) * alpha;
-    out[o + 3] = lerpAngle(p0[k + 3]!, p1[k + 3]!, alpha);
+    out[o + 2] = p0[k + 2]! + (p1[k + 2]! - p0[k + 2]!) * alpha + Math.sin(h) * half;
+    out[o + 3] = h;
     out[o + 4] = sim.length[i]!;
     out[o + 5] = sim.height[i]!;
     out[o + 6] = sim.width[i]!;

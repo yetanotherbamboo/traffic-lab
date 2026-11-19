@@ -149,10 +149,23 @@ _Last updated: 2026-11-19_
   - **Simulation:** typed-array vehicle state at a fixed 10 Hz (`src/sim/traffic.ts`). Spawners and sinks sit at roads leaving the scene.
   - **Rendering:** instanced low-poly cars and vans, interpolated between simulation steps.
   - **Probe:** over 10 simulated minutes, a step took about 0.03 ms, with no gridlock.
+  - **Status:** verified on phone.
+- [x] **4. Intersections and control:**
+  - **Conflict zones:** `src/sim/junctions.ts` precomputes them per connector pair, crossing or merging, plus split distances for connectors leaving the same lane.
+  - **Junction control** per node (`RoadNode.control`):
+    - **Signal:** fixed-time phases per opposite-approach pair (green, 3 s yellow, 2 s all-red), with permitted left turns waiting in the box, one per movement, and phase clearance.
+    - **Priority:** main road vs side road (a give-way line on side roads).
+    - **All-way stop:** stop, then first-arrived goes first.
+  - **Right of way:** side road gives way to main road; turning traffic gives way to straight traffic; then give way to traffic from the right. Gap acceptance uses a 2 s critical margin.
+  - **Inside the junction** (`src/sim/traffic.ts`): first-in-first-out order, which rules out circular waits. Vehicles entering give way to those already inside; nobody enters onto a full exit; a latched breaker handles rare cases where vehicles are still mutually stuck after 6 s.
+  - **Routing:** per-destination cost-to-go tables (`src/sim/router.ts`), so vehicles can change lanes freely.
+  - **Lane changes:** MOBIL with a strategic bias towards lanes that lead to the destination. A changer keeps blocking its old lane until it has moved across, and the sideways slide is smoothed visually.
+  - **Visuals:** traffic lights whose lamps change colour, stop signs, stop and give-way lines. Vehicles are now rendered centred, with heading taken from a trailing rear point.
+  - **Stress check:** 4 junction types × 5 seeds, plus the city at 1× and 1.5× demand. At nominal demand there were no deadlocks and essentially no overlaps (one sample in one T-junction seed).
   - **Status:** awaiting phone check.
 
 ### Next
-- [ ] **4. Intersections and control:** conflict zones, priority/yield, signals, MOBIL lane changes.
+- [ ] **5. Editor (touch-first).**
 
 ### Known issues / tech debt
 - **Junction sizing:** `RoadNetwork.junctionRadius` is a heuristic sized for roughly perpendicular crossings. Acute angles can make corners overlap.
@@ -161,9 +174,10 @@ _Last updated: 2026-11-19_
 - **Junction markings:** there are no stop lines or crosswalks yet.
 - **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.
 - **Demolition:** construction-zone lots are flagged (`Lot.inZone`), but demolition cost and the sink animation are deferred to the editor (Milestone 5).
-- **Sim v1, no junction control:** vehicles on crossing or merging connectors ignore each other until they share a lane, so they can visually pass through each other at junctions. Milestone 4 fixes this.
-- **Sim v1, no lane changes:** each (origin, destination) pair uses one cached lane route, so multi-lane roads are unevenly used.
-- **Sim v1, spawn queues:** a blocked entry lane delays spawns (pending capped at 20); this isn't measured yet.
+- **Deadlock breaker:** when it fires, a stuck vehicle creeps through, which can cause a brief visual overlap. This is rare at nominal demand and more frequent when the network is oversaturated (1.5× demand: a few samples per 20 minutes).
+- **Fixed signal timings:** green time is 10 s + 8 s per lane, with no actuation or protected left phases yet. Configurable in the editor (Milestone 5).
+- **Free-flow routing:** routes use free-flow time only, so vehicles don't avoid congestion. Dynamic rerouting is a candidate for Milestone 7/8.
+- **Spawn queues:** a blocked entry lane delays spawns (pending capped at 20); this isn't measured yet.
 - **City generation speed:** it runs on the main thread at startup (time shown in the HUD). Move it to a worker if it grows.
 - **Unconfirmed control:** the mouse right-drag rotate direction hasn't been checked by the user.
 - **Hand-ordered arms:** junction arms are ordered by angle. Overlapping or self-intersecting roads aren't validated (an editor milestone task).

@@ -165,7 +165,7 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 3) in vec4 iPosRot;  // xyz = position, w = rotation around Y
 layout(location = 4) in vec3 iScale;
 layout(location = 5) in vec3 iColor;
-layout(location = 8) in float iKind;   // 0 = plain, 1 = facade with windows, 2 = vehicle
+layout(location = 8) in float iKind;   // 0 = plain, 1 = facade with windows, 2 = vehicle, 3 = emissive
 uniform mat4 uViewProj;
 out vec3 vWorld;
 out vec3 vNormal;
@@ -202,6 +202,10 @@ float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 void main() {
   vec3 col = vColor;
   int kind = int(vKindH.x + 0.5);
+  if (kind == 3) { // emissive (signal lamps): no lighting
+    outColor = vec4(applyFog(zoneGrade(col, vWorld), vWorld), 1.0);
+    return;
+  }
   if (kind == 2 && vLocal.y > vKindH.y * 0.52 && vLocalN.y < 0.5) {
     col = vec3(0.24, 0.29, 0.37); // vehicle cabin glass
   }

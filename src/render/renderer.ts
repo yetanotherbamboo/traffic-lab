@@ -28,8 +28,9 @@ export class Renderer {
   private readonly kits: Record<KitName, Mesh>;
   private readonly shadows: Mesh;
   private readonly vehicles: Mesh;
+  private readonly props: Mesh;
   private readonly litMeshes: Mesh[];
-  private vehiclesReserved = false;
+  private readonly reserved = new Set<Mesh>();
   private roads: Mesh | null = null;
   private zone: Zone = { cx: 0, cz: 0, hx: 1e5, hz: 1e5, radius: 0, contextScale: 2 };
   drawCalls = 0;
@@ -55,20 +56,31 @@ export class Renderer {
 
     const car = carGeometry();
     this.vehicles = new Mesh(gl, car.vertices, POS_NORMAL, car.indices, LIT_INSTANCE);
-    this.litMeshes = [...Object.values(this.kits), this.vehicles];
+    const box = boxGeometry();
+    this.props = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
+    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.props];
   }
 
   /**
-   * Uploads vehicle instances for this frame. `data` should be the same preallocated buffer every
-   * frame: the first call reserves GPU space for all of it, later calls upload only `count` instances.
+   * Per-frame instance upload. `data` should be the same preallocated buffer every frame: the first
+   * call reserves GPU space for all of it, later calls upload only `count` instances.
    */
-  setVehicles(data: Float32Array, count: number): void {
-    if (!this.vehiclesReserved) {
-      this.vehicles.setInstances(data, count);
-      this.vehiclesReserved = true;
+  private upload(mesh: Mesh, data: Float32Array, count: number): void {
+    if (!this.reserved.has(mesh)) {
+      mesh.setInstances(data, count);
+      this.reserved.add(mesh);
     } else {
-      this.vehicles.setInstances(data.subarray(0, count * LIT_STRIDE), count);
+      mesh.setInstances(data.subarray(0, count * LIT_STRIDE), count);
     }
+  }
+
+  setVehicles(data: Float32Array, count: number): void {
+    this.upload(this.vehicles, data, count);
+  }
+
+  /** Junction furniture (lines, poles, signs, signal lamps). */
+  setProps(data: Float32Array, count: number): void {
+    this.upload(this.props, data, count);
   }
 
   setZone(zone: Zone): void {

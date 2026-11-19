@@ -13,10 +13,15 @@ export interface LaneProfile {
   speedLimit?: number; // km/h, default 50
 }
 
+/** How a junction is controlled. 'priority' = main road has right of way, side roads give way. */
+export type JunctionControl = 'priority' | 'allway' | 'signal';
+
 export interface RoadNode {
   id: number;
   pos: Vec3;
   segments: number[];
+  /** Junction control; defaults to 'priority' at junctions with 3+ roads. */
+  control?: JunctionControl;
 }
 
 export interface RoadSegment {

@@ -20,6 +20,10 @@ export interface Lane {
   toNode: number;
   /** 0 = innermost lane (next to the centre line), increasing towards the kerb. */
   index: number;
+  /** Road lanes: index into `LaneGraph.groups` (parallel lanes, same road and direction). -1 for connectors. */
+  group: number;
+  /** Lane width in metres. */
+  width: number;
   turn: Turn | null;
   path: Path;
   /** m/s */
@@ -31,6 +35,8 @@ export interface Lane {
 /** Lane-level graph derived from the road network: road lanes plus connectors through junctions. */
 export class LaneGraph {
   readonly lanes: Lane[] = [];
+  /** Parallel road lanes (same segment and direction), ordered by `index`. */
+  readonly groups: number[][] = [];
   /** Dead-end nodes where vehicles enter (outgoing lanes) / leave (incoming lanes) the scene. */
   readonly sources = new Map<number, number[]>();
   readonly sinks = new Map<number, number[]>();
@@ -59,15 +65,25 @@ export class LaneGraph {
       }
       const offset = (u: number): Vec3[] =>
         centre.map((p, k) => vec3.add(p, vec3.add(vec3.scale(rights[k]!, u), [0, LANE_Y, 0])));
+      const fwd: number[] = [], bwd: number[] = [];
       for (let i = 0; i < forward; i++) {
         const l = this.add('road', seg.id, -1, seg.a, seg.b, i, null, new Path(offset((i + 0.5) * laneWidth)), speedLimit / 3.6);
+        l.width = laneWidth;
+        fwd.push(l.id);
         group(outgoing, seg.a, seg.id, l);
         group(incoming, seg.b, seg.id, l);
       }
       for (let i = 0; i < backward; i++) {
         const l = this.add('road', seg.id, -1, seg.b, seg.a, i, null, new Path(offset(-(i + 0.5) * laneWidth).reverse()), speedLimit / 3.6);
+        l.width = laneWidth;
+        bwd.push(l.id);
         group(outgoing, seg.b, seg.id, l);
         group(incoming, seg.a, seg.id, l);
+      }
+      for (const ids of [fwd, bwd]) {
+        if (ids.length === 0) continue;
+        for (const id of ids) this.lanes[id]!.group = this.groups.length;
+        this.groups.push(ids);
       }
     }
     for (const m of [incoming, outgoing]) for (const bySeg of m.values()) for (const ls of bySeg.values()) ls.sort((a, b) => a.index - b.index);
@@ -99,7 +115,10 @@ export class LaneGraph {
 
   private add(kind: Lane['kind'], segment: number, node: number, from: number, to: number, index: number,
     turn: Turn | null, path: Path, speedLimit: number): Lane {
-    const lane: Lane = { id: this.lanes.length, kind, segment, node, fromNode: from, toNode: to, index, turn, path, speedLimit, next: [], prev: [] };
+    const lane: Lane = {
+      id: this.lanes.length, kind, segment, node, fromNode: from, toNode: to, index, group: -1, width: 3.25,
+      turn, path, speedLimit, next: [], prev: [],
+    };
     this.lanes.push(lane);
     return lane;
   }

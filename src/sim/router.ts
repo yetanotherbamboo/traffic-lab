@@ -42,37 +42,46 @@ class MinHeap {
 }
 
 /**
- * Fastest lane-level route (free-flow travel time) from any of `startLanes` to any of `goalLanes`.
- * Returns the sequence of lane ids, or null if unreachable.
+ * Routing towards one destination for every lane at once:
+ *  cost[l] = free-flow travel time (s) from the start of lane l to the destination (Infinity if unreachable),
+ *  next[l] = the lane to take after l (-1 at the destination or if unreachable).
+ * Vehicles follow `next` and may switch to a parallel lane at any time without replanning.
  */
-export function findRoute(graph: LaneGraph, startLanes: number[], goalLanes: number[]): Int32Array | null {
+export interface RouteTable {
+  cost: Float64Array;
+  next: Int32Array;
+}
+
+export function computeRouteTable(graph: LaneGraph, goalLanes: number[]): RouteTable {
   const n = graph.lanes.length;
-  const dist = new Float64Array(n).fill(Infinity);
-  const prev = new Int32Array(n).fill(-1);
-  const goal = new Set(goalLanes);
+  const cost = new Float64Array(n).fill(Infinity);
+  const next = new Int32Array(n).fill(-1);
   const heap = new MinHeap();
-  for (const id of startLanes) {
+  for (const id of goalLanes) {
     const l = graph.lanes[id]!;
-    dist[id] = l.path.length / l.speedLimit;
-    heap.push(dist[id]!, id);
+    cost[id] = l.path.length / l.speedLimit;
+    heap.push(cost[id]!, id);
   }
+  // Reverse Dijkstra over `prev` links.
   while (heap.size > 0) {
-    const [d, id] = heap.pop();
-    if (d > dist[id]!) continue;
-    if (goal.has(id)) {
-      const route: number[] = [];
-      for (let c = id; c !== -1; c = prev[c]!) route.push(c);
-      return Int32Array.from(route.reverse());
-    }
-    for (const nx of graph.lanes[id]!.next) {
-      const l = graph.lanes[nx]!;
-      const nd = d + l.path.length / l.speedLimit;
-      if (nd < dist[nx]!) {
-        dist[nx] = nd;
-        prev[nx] = id;
-        heap.push(nd, nx);
+    const [c, id] = heap.pop();
+    if (c > cost[id]!) continue;
+    for (const p of graph.lanes[id]!.prev) {
+      const l = graph.lanes[p]!;
+      const nc = c + l.path.length / l.speedLimit;
+      if (nc < cost[p]!) {
+        cost[p] = nc;
+        next[p] = id;
+        heap.push(nc, p);
       }
     }
   }
-  return null;
+  return { cost, next };
+}
+
+/** Lane sequence from `start` following a route table (for tests and debugging). */
+export function traceRoute(table: RouteTable, start: number, maxLen = 1000): number[] {
+  const out = [start];
+  for (let l = table.next[start]!; l >= 0 && out.length < maxLen; l = table.next[l]!) out.push(l);
+  return out;
 }

@@ -59,5 +59,9 @@ export function buildTestNetwork(): RoadNetwork {
   net.addSegment(s, net.addNode([0, 0, out]), LOCAL);
   net.addSegment(nw, net.addNode([-out, 0, -R]), LOCAL);
   net.addSegment(sw, net.addNode([-R, 0, out]), LOCAL);
+
+  // Junction control: signals at the main cross, an all-way stop to the north, priority elsewhere.
+  net.node(c).control = 'signal';
+  net.node(n).control = 'allway';
   return net;
 }

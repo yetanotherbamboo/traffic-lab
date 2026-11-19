@@ -94,6 +94,42 @@ export function coneGeometry(sides = 7): Geometry {
   return flatConvex(tris, [0, 0.3, 0]);
 }
 
+function boxTris(min: V3, max: V3): [V3, V3, V3][] {
+  const [x0, y0, z0] = min, [x1, y1, z1] = max;
+  const c = (x: number, y: number, z: number): V3 => [x, y, z];
+  const quad = (a: V3, b: V3, cc: V3, d: V3): [V3, V3, V3][] => [[a, b, cc], [a, cc, d]];
+  return [
+    ...quad(c(x0, y0, z0), c(x1, y0, z0), c(x1, y1, z0), c(x0, y1, z0)),
+    ...quad(c(x0, y0, z1), c(x1, y0, z1), c(x1, y1, z1), c(x0, y1, z1)),
+    ...quad(c(x0, y0, z0), c(x0, y0, z1), c(x0, y1, z1), c(x0, y1, z0)),
+    ...quad(c(x1, y0, z0), c(x1, y0, z1), c(x1, y1, z1), c(x1, y1, z0)),
+    ...quad(c(x0, y1, z0), c(x1, y1, z0), c(x1, y1, z1), c(x0, y1, z1)),
+  ];
+}
+
+function merge(parts: Geometry[]): Geometry {
+  const vertices = new Float32Array(parts.reduce((n, g) => n + g.vertices.length, 0));
+  let o = 0;
+  for (const g of parts) {
+    vertices.set(g.vertices, o);
+    o += g.vertices.length;
+  }
+  return { vertices, indices: Uint16Array.from({ length: vertices.length / 6 }, (_, i) => i) };
+}
+
+/**
+ * Low-poly car, unit size: length along x (front = +x), width along z, height along y.
+ * Body below y = 0.5, cabin above (the shader tints cabin sides as glass). No bottom faces.
+ */
+export function carGeometry(): Geometry {
+  const box = (min: V3, max: V3): Geometry =>
+    flatConvex(boxTris(min, max), [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2]);
+  return merge([
+    box([-0.5, 0.1, -0.5], [0.5, 0.5, 0.5]),
+    box([-0.33, 0.5, -0.43], [0.2, 0.92, 0.43]),
+  ]);
+}
+
 /** Flat square on y=0 centred at origin, position only. */
 export function planeGeometry(size: number): { vertices: Float32Array; indices: Uint16Array } {
   const h = size / 2;

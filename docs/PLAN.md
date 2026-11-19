@@ -141,10 +141,18 @@ _Last updated: 2026-11-19_
   - **City generation:** seeded generator in `src/env/city.ts`. Lots line both sides of every street (houses with gable roofs, shops, mid-rises, parks); street trees and yard trees fill the rest.
   - **Look:** shader-drawn windows (a few warmly lit), soft blob shadows, palette in `src/env/style.ts`.
   - **Construction zone:** `src/env/zone.ts` and the `COMMON` shader chunk. Full colour inside with the build grid and a pulsing border line; outside, a desaturated, darker context ring fading to the background.
-  - **Status:** tests pass; awaiting phone check.
+  - **Status:** verified on phone.
+- [x] **3. Traffic simulation v1:**
+  - **Lane graph:** `src/sim/laneGraph.ts` holds road lanes plus curved connectors through junctions. Lane-use rules: the inner lane turns left, the kerb lane turns right, all lanes may go straight.
+  - **Routing:** fastest lane-level route by free-flow time, `src/sim/router.ts`.
+  - **Driving:** IDM car-following with anticipation of slower lanes ahead, such as tight turns (`src/sim/idm.ts`).
+  - **Simulation:** typed-array vehicle state at a fixed 10 Hz (`src/sim/traffic.ts`). Spawners and sinks sit at roads leaving the scene.
+  - **Rendering:** instanced low-poly cars and vans, interpolated between simulation steps.
+  - **Probe:** over 10 simulated minutes, a step took about 0.03 ms, with no gridlock.
+  - **Status:** awaiting phone check.
 
 ### Next
-- [ ] **3. Traffic simulation v1.**
+- [ ] **4. Intersections and control:** conflict zones, priority/yield, signals, MOBIL lane changes.
 
 ### Known issues / tech debt
 - **Junction sizing:** `RoadNetwork.junctionRadius` is a heuristic sized for roughly perpendicular crossings. Acute angles can make corners overlap.
@@ -153,6 +161,9 @@ _Last updated: 2026-11-19_
 - **Junction markings:** there are no stop lines or crosswalks yet.
 - **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.
 - **Demolition:** construction-zone lots are flagged (`Lot.inZone`), but demolition cost and the sink animation are deferred to the editor (Milestone 5).
+- **Sim v1, no junction control:** vehicles on crossing or merging connectors ignore each other until they share a lane, so they can visually pass through each other at junctions. Milestone 4 fixes this.
+- **Sim v1, no lane changes:** each (origin, destination) pair uses one cached lane route, so multi-lane roads are unevenly used.
+- **Sim v1, spawn queues:** a blocked entry lane delays spawns (pending capped at 20); this isn't measured yet.
 - **City generation speed:** it runs on the main thread at startup (time shown in the HUD). Move it to a worker if it grows.
 - **Unconfirmed control:** the mouse right-drag rotate direction hasn't been checked by the user.
 - **Hand-ordered arms:** junction arms are ordered by angle. Overlapping or self-intersecting roads aren't validated (an editor milestone task).

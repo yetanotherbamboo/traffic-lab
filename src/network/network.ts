@@ -10,6 +10,7 @@ export interface LaneProfile {
   backward: number;
   laneWidth: number; // metres
   sidewalk: number; // width of each sidewalk, metres (0 = none)
+  speedLimit?: number; // km/h, default 50
 }
 
 export interface RoadNode {

@@ -12,6 +12,7 @@ export const SHADOW_STRIDE = 8;
 /** Instance `kind`: 0 = plain surface, 1 = building facade (shader draws windows). */
 export const KIND_PLAIN = 0;
 export const KIND_FACADE = 1;
+export const KIND_VEHICLE = 2;
 
 export type LotKind = 'house' | 'shop' | 'midrise' | 'park';
 export type KitName = 'box' | 'roof' | 'crown' | 'cone';

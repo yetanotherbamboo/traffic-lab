@@ -1,9 +1,22 @@
 import type { Zone } from '../env/zone';
 import { type LaneProfile, RoadNetwork } from '../network/network';
+import type { Spawner } from '../sim/traffic';
 
-const ARTERIAL: LaneProfile = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5 };
-const LOCAL: LaneProfile = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5 };
-const ONE_WAY: LaneProfile = { forward: 2, backward: 0, laneWidth: 3.25, sidewalk: 2 };
+const ARTERIAL: LaneProfile = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 };
+const LOCAL: LaneProfile = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+const ONE_WAY: LaneProfile = { forward: 2, backward: 0, laneWidth: 3.25, sidewalk: 2, speedLimit: 40 };
+
+/** Synthetic demand: every road leaving the scene is an origin and a destination. */
+export function testSpawners(net: RoadNetwork): Spawner[] {
+  const out: Spawner[] = [];
+  for (const node of net.nodes.values()) {
+    if (node.segments.length !== 1) continue;
+    const seg = net.segments.get(node.segments[0]!)!;
+    const lanes = Math.max(seg.profile.forward, seg.profile.backward);
+    out.push({ node: node.id, rate: lanes >= 2 ? 900 : 340 });
+  }
+  return out;
+}
 
 /** Buildable area around the central crossroad; the visible city is twice as large. */
 export const TEST_ZONE: Zone = { cx: 0, cz: 0, hx: 70, hz: 70, radius: 14, contextScale: 2 };

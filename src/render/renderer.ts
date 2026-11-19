@@ -4,7 +4,9 @@ import type { Zone } from '../env/zone';
 import { type Attrib, Mesh } from '../gl/mesh';
 import { Program } from '../gl/program';
 import type { OrbitCamera } from './camera';
-import { type Geometry, boxGeometry, coneGeometry, crownGeometry, planeGeometry, roofGeometry } from './geometry';
+import {
+  type Geometry, boxGeometry, carGeometry, coneGeometry, crownGeometry, planeGeometry, roofGeometry,
+} from './geometry';
 import type { MeshData } from './roadMesh';
 import { groundFS, groundVS, litFS, litInstancedVS, roadFS, roadVS, shadowFS, shadowVS } from './shaders';
 
@@ -25,6 +27,9 @@ export class Renderer {
   private readonly ground: Mesh;
   private readonly kits: Record<KitName, Mesh>;
   private readonly shadows: Mesh;
+  private readonly vehicles: Mesh;
+  private readonly litMeshes: Mesh[];
+  private vehiclesReserved = false;
   private roads: Mesh | null = null;
   private zone: Zone = { cx: 0, cz: 0, hx: 1e5, hz: 1e5, radius: 0, contextScale: 2 };
   drawCalls = 0;
@@ -47,6 +52,23 @@ export class Renderer {
       kits[name] = new Mesh(gl, g.vertices, POS_NORMAL, g.indices, LIT_INSTANCE);
     }
     this.kits = kits;
+
+    const car = carGeometry();
+    this.vehicles = new Mesh(gl, car.vertices, POS_NORMAL, car.indices, LIT_INSTANCE);
+    this.litMeshes = [...Object.values(this.kits), this.vehicles];
+  }
+
+  /**
+   * Uploads vehicle instances for this frame. `data` should be the same preallocated buffer every
+   * frame: the first call reserves GPU space for all of it, later calls upload only `count` instances.
+   */
+  setVehicles(data: Float32Array, count: number): void {
+    if (!this.vehiclesReserved) {
+      this.vehicles.setInstances(data, count);
+      this.vehiclesReserved = true;
+    } else {
+      this.vehicles.setInstances(data.subarray(0, count * LIT_STRIDE), count);
+    }
   }
 
   setZone(zone: Zone): void {
@@ -106,7 +128,7 @@ export class Renderer {
     }
 
     this.common(this.litProg, cam, time);
-    for (const kit of Object.values(this.kits)) {
+    for (const kit of this.litMeshes) {
       if (kit.instanceCount === 0) continue;
       kit.draw();
       this.drawCalls++;

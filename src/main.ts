@@ -1,6 +1,9 @@
 import { FixedLoop } from './core/loop';
-import { generateCity } from './env/city';
-import { TEST_SEED, TEST_ZONE, buildTestNetwork } from './game/testScene';
+import { LIT_STRIDE, generateCity } from './env/city';
+import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from './game/testScene';
+import { LaneGraph } from './sim/laneGraph';
+import { TrafficSim } from './sim/traffic';
+import { writeVehicleInstances } from './render/vehicles';
 import { CameraController } from './input/cameraController';
 import { OrbitCamera } from './render/camera';
 import { Renderer } from './render/renderer';
@@ -28,6 +31,11 @@ const t0 = performance.now();
 const city = generateCity(network, zone, TEST_SEED);
 const genMs = performance.now() - t0;
 
+const lanes = new LaneGraph(network);
+const sim = new TrafficSim(lanes, testSpawners(network), TEST_SEED);
+for (let i = 0; i < 900; i++) sim.step(SIM_STEP); // warm up 90 s so the streets aren't empty
+const vehicleData = new Float32Array(sim.capacity * LIT_STRIDE);
+
 let renderer: Renderer;
 function initGL(): void {
   renderer = new Renderer(gl!);
@@ -51,13 +59,12 @@ let hudTimer = 0;
 let time = 0;
 const loop = new FixedLoop(
   SIM_STEP,
-  () => {
-    /* simulation goes here (Milestone 3) */
-  },
-  (_alpha, frameDt) => {
+  (dt) => sim.step(dt),
+  (alpha, frameDt) => {
     time += frameDt;
     resize();
     camera.update(canvas.width / canvas.height);
+    renderer.setVehicles(vehicleData, writeVehicleInstances(sim, alpha, vehicleData));
     renderer.render(camera, canvas.width, canvas.height, time);
 
     if (frameDt > 0) fps += (1 / frameDt - fps) * 0.05;
@@ -66,7 +73,8 @@ const loop = new FixedLoop(
       hudTimer = 0;
       hud.textContent =
         `${fps.toFixed(0)} fps · ${renderer.drawCalls} draws · ${canvas.width}×${canvas.height}\n` +
-        `${city.lots.length} lots · city ${genMs.toFixed(0)} ms`;
+        `${city.lots.length} lots · city ${genMs.toFixed(0)} ms\n` +
+        `${sim.stats.vehicles} vehicles · avg ${(sim.stats.meanSpeed * 3.6).toFixed(0)} km/h · ${sim.stats.exited} done`;
     }
   },
 );

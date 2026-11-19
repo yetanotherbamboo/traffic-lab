@@ -82,6 +82,8 @@ export class TrafficSim {
   /** Seconds stopped inside a junction, and whether the deadlock breaker is active for the vehicle. */
   readonly stuck: Float32Array;
   readonly breaking: Uint8Array;
+  /** Lane the vehicle was on before its current one (-1 if none): its rear may still be there. */
+  readonly lastLane: Int32Array;
   /** Lane a vehicle is changing out of, while it still physically overlaps it (else -1). */
   readonly fromLane: Int32Array;
   /** Poses at the previous and current step, for render interpolation. */
@@ -122,6 +124,7 @@ export class TrafficSim {
     this.lcCooldown = f32();
     this.lat = f32();
     this.fromLane = new Int32Array(capacity).fill(-1);
+    this.lastLane = new Int32Array(capacity).fill(-1);
     this.enterTime = new Float32Array(capacity).fill(Infinity);
     this.stuck = f32();
     this.breaking = new Uint8Array(capacity);
@@ -203,6 +206,7 @@ export class TrafficSim {
     this.lcCooldown[i] = LC_COOLDOWN;
     this.lat[i] = 0;
     this.fromLane[i] = -1;
+    this.lastLane[i] = -1;
     this.enterTime[i] = Infinity;
     this.stuck[i] = 0;
     this.breaking[i] = 0;
@@ -603,6 +607,7 @@ export class TrafficSim {
         const K = lanes[best]!;
         this.lat[i] = this.lat[i]! + (K.index < L.index ? 1 : -1) * L.width;
         this.fromLane[i] = L.id;
+        this.lastLane[i] = -1;
         this.lane[i] = best;
         this.s[i] = bestS;
         this.lcCooldown[i] = LC_COOLDOWN;
@@ -671,6 +676,7 @@ export class TrafficSim {
             break;
           }
         }
+        this.lastLane[i] = lane.id;
         lane = lanes[nx]!;
         this.lane[i] = nx;
         this.fromLane[i] = -1;
@@ -741,9 +747,12 @@ export class TrafficSim {
     // Heading from a trailing rear point, like a real car whose rear follows the path behind it.
     const back = this.length[i]! * 0.7;
     const r = this.rearScratch;
-    if (s >= back || lane.kind !== 'connector') lane.path.sample(Math.max(s - back, 0), r, 0);
-    else {
-      const prev = lanes[lane.prev[0]!]!;
+    const last = this.lastLane[i]!;
+    if (s >= back || last < 0) {
+      lane.path.sample(Math.max(s - back, 0), r, 0);
+    } else {
+      // The rear is still on the lane we came from (e.g. the end of a turn).
+      const prev = lanes[last]!;
       prev.path.sample(prev.path.length - (back - s), r, 0);
     }
     const dx = this.pose[o]! - r[0]!, dz = this.pose[o + 2]! - r[2]!;

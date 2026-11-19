@@ -151,6 +151,32 @@ describe('car-following', () => {
   });
 });
 
+describe('turn motion', () => {
+  it('heading changes smoothly through a turn, including when the turn ends', () => {
+    const net = new RoadNetwork();
+    const c = net.addNode([0, 0, 0]);
+    const west = net.addNode([-150, 0, 0]), east = net.addNode([150, 0, 0]), south = net.addNode([0, 0, 150]);
+    for (const n of [west, east, south]) net.addSegment(c, n, LOCAL);
+    const sim = new TrafficSim(new LaneGraph(net), [], 1);
+    for (const [from, to] of [[west, south], [south, west], [south, east], [east, south]] as const) {
+      const i = sim.spawn(from, to, { speedFactor: 1 });
+      let prev = NaN, maxStep = 0;
+      for (let t = 0; t < 400 && sim.alive[i]; t++) {
+        sim.step(DT);
+        const h = sim.pose[i * 4 + 3]!;
+        if (!Number.isNaN(prev)) {
+          let d = Math.abs(h - prev);
+          if (d > Math.PI) d = 2 * Math.PI - d;
+          maxStep = Math.max(maxStep, d);
+        }
+        prev = h;
+      }
+      // A car at turning speed rotates well under 0.1 rad per 0.1 s step; a snap would be ~0.3+.
+      expect(maxStep, `${from}→${to}`).toBeLessThan(0.12);
+    }
+  });
+});
+
 describe('lane changes', () => {
   it('faster vehicles overtake a slow one on a two-lane road', () => {
     const { sim, a, b } = straightRoad(2);

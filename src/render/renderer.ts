@@ -3,7 +3,8 @@ import { Mesh } from '../gl/mesh';
 import { Program } from '../gl/program';
 import type { OrbitCamera } from './camera';
 import { boxGeometry, planeGeometry } from './geometry';
-import { groundFS, groundVS, litFS, litInstancedVS } from './shaders';
+import type { MeshData } from './roadMesh';
+import { groundFS, groundVS, litFS, litInstancedVS, roadFS, roadVS } from './shaders';
 
 export const BACKGROUND: Vec3 = [0.14, 0.145, 0.18];
 const SUN_DIR = vec3.normalize([0.45, 0.8, 0.35]);
@@ -18,12 +19,15 @@ export class Renderer {
   private readonly groundProg: Program;
   private readonly litProg: Program;
   private readonly ground: Mesh;
+  private readonly roadProg: Program;
+  private roads: Mesh | null = null;
   readonly boxes: Mesh;
   drawCalls = 0;
 
   constructor(private readonly gl: WebGL2RenderingContext) {
     this.groundProg = new Program(gl, groundVS, groundFS, 'ground');
     this.litProg = new Program(gl, litInstancedVS, litFS, 'lit');
+    this.roadProg = new Program(gl, roadVS, roadFS, 'road');
 
     const plane = planeGeometry(4000);
     this.ground = new Mesh(gl, plane.vertices, [{ loc: 0, size: 3 }], plane.indices);
@@ -34,6 +38,13 @@ export class Renderer {
       { loc: 4, size: 3 },
       { loc: 5, size: 3 },
     ]);
+  }
+
+  setRoads(data: MeshData): void {
+    this.roads?.dispose();
+    this.roads = new Mesh(this.gl, data.vertices, [
+      { loc: 0, size: 3 }, { loc: 1, size: 3 }, { loc: 2, size: 2 }, { loc: 6, size: 3 }, { loc: 7, size: 1 },
+    ], data.indices);
   }
 
   render(cam: OrbitCamera, width: number, height: number): void {
@@ -67,5 +78,19 @@ export class Renderer {
       .vec3('uGroundColor', GROUND_BOUNCE);
     this.boxes.draw();
     this.drawCalls++;
+
+    if (this.roads) {
+      this.roadProg.use()
+        .mat4('uViewProj', cam.viewProj)
+        .vec3('uCamPos', cam.eye)
+        .vec3('uFogColor', BACKGROUND)
+        .vec2('uFog', fogStart, fogEnd)
+        .vec3('uSunDir', SUN_DIR)
+        .vec3('uSunColor', SUN_COLOR)
+        .vec3('uSkyColor', SKY_COLOR)
+        .vec3('uGroundColor', GROUND_BOUNCE);
+      this.roads.draw();
+      this.drawCalls++;
+    }
   }
 }

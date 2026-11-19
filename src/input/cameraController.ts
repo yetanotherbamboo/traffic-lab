@@ -89,7 +89,7 @@ export class CameraController {
       const mx = (nx + other.x) / 2, my = (ny + other.y) / 2;
 
       if (d0 > 1 && d1 > 1) this.zoomAt(mx, my, d1 / d0);
-      this.cam.yaw -= da;
+      this.cam.yaw += da;
       this.cam.pitch += ((ny - p.y) / 2) * 0.006; // midpoint vertical motion → tilt
       this.cam.update();
     }

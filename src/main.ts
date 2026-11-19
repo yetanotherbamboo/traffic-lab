@@ -1,7 +1,9 @@
 import { FixedLoop } from './core/loop';
 import { CameraController } from './input/cameraController';
 import { OrbitCamera } from './render/camera';
+import { buildTestNetwork, testBoxes } from './game/testScene';
 import { BOX_STRIDE, Renderer } from './render/renderer';
+import { buildRoadMesh } from './render/roadMesh';
 
 const SIM_STEP = 0.1; // 10 Hz simulation tick
 
@@ -17,32 +19,14 @@ if (!gl) {
 const camera = new OrbitCamera();
 new CameraController(canvas, camera);
 
-/** Test scene: a ring of pastel boxes of different sizes. */
-function testBoxes(): Float32Array {
-  const palette = [
-    [0.95, 0.78, 0.62], [0.78, 0.86, 0.93], [0.96, 0.9, 0.7],
-    [0.85, 0.75, 0.88], [0.98, 0.7, 0.6], [0.75, 0.88, 0.78],
-  ];
-  const count = 24;
-  const data = new Float32Array(count * BOX_STRIDE);
-  for (let i = 0; i < count; i++) {
-    const a = (i / count) * Math.PI * 2;
-    const r = 30 + (i % 3) * 18;
-    const c = palette[i % palette.length]!;
-    data.set([
-      Math.cos(a) * r, 0, Math.sin(a) * r, -a,
-      8 + (i % 4) * 3, 4 + ((i * 7) % 5) * 5, 8 + (i % 2) * 4,
-      c[0]!, c[1]!, c[2]!,
-    ], i * BOX_STRIDE);
-  }
-  return data;
-}
+const network = buildTestNetwork();
 
 let renderer: Renderer;
 function initGL(): void {
   renderer = new Renderer(gl!);
   const boxes = testBoxes();
   renderer.boxes.setInstances(boxes, boxes.length / BOX_STRIDE);
+  renderer.setRoads(buildRoadMesh(network));
 }
 
 function resize(): void {
@@ -86,5 +70,11 @@ canvas.addEventListener('webglcontextrestored', () => {
 });
 document.addEventListener('visibilitychange', () => (document.hidden ? loop.stop() : loop.start()));
 
-initGL();
-loop.start();
+try {
+  initGL();
+  loop.start();
+} catch (err) {
+  hud.style.whiteSpace = 'pre-wrap';
+  hud.textContent = `Startup error:\n${err instanceof Error ? err.message : String(err)}`;
+  throw err;
+}

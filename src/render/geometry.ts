@@ -30,6 +30,70 @@ export function boxGeometry(): Geometry {
   return { vertices: new Float32Array(v), indices: new Uint16Array(idx) };
 }
 
+type V3 = [number, number, number];
+
+/**
+ * Flat-shaded mesh from a triangle list of a convex shape. Each triangle is wound so its
+ * normal points away from `centre`, so the input order doesn't matter.
+ */
+function flatConvex(tris: [V3, V3, V3][], centre: V3): Geometry {
+  const v: number[] = [];
+  for (const [a, b0, c0] of tris) {
+    let b = b0, c = c0;
+    const e1: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const e2: V3 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n: V3 = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    const mid: V3 = [(a[0] + b[0] + c[0]) / 3 - centre[0], (a[1] + b[1] + c[1]) / 3 - centre[1], (a[2] + b[2] + c[2]) / 3 - centre[2]];
+    if (n[0] * mid[0] + n[1] * mid[1] + n[2] * mid[2] < 0) {
+      [b, c] = [c, b];
+      n = [-n[0], -n[1], -n[2]];
+    }
+    const l = Math.hypot(n[0], n[1], n[2]) || 1;
+    for (const p of [a, b, c]) v.push(p[0], p[1], p[2], n[0] / l, n[1] / l, n[2] / l);
+  }
+  const count = v.length / 6;
+  return { vertices: new Float32Array(v), indices: Uint16Array.from({ length: count }, (_, i) => i) };
+}
+
+/** Gable roof: footprint x,z in [-0.5, 0.5], ridge along x at y = 1. */
+export function roofGeometry(): Geometry {
+  const a: V3 = [-0.5, 0, -0.5], b: V3 = [0.5, 0, -0.5], c: V3 = [0.5, 0, 0.5], d: V3 = [-0.5, 0, 0.5];
+  const r0: V3 = [-0.5, 1, 0], r1: V3 = [0.5, 1, 0];
+  return flatConvex([
+    [a, b, r1], [a, r1, r0], // north slope
+    [d, c, r1], [d, r1, r0], // south slope
+    [a, d, r0], [b, c, r1], // gables
+  ], [0, 0.3, 0]);
+}
+
+/** Low-poly round tree crown (icosahedron), spanning y in [0, 2], radius 1. */
+export function crownGeometry(): Geometry {
+  const t = (1 + Math.sqrt(5)) / 2;
+  const raw: V3[] = [
+    [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t],
+    [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
+  ];
+  const p = raw.map(([x, y, z]): V3 => {
+    const l = Math.hypot(x, y, z);
+    return [x / l, y / l + 1, z / l];
+  });
+  const faces = [
+    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+  ];
+  return flatConvex(faces.map(([i, j, k]) => [p[i!]!, p[j!]!, p[k!]!]), [0, 1, 0]);
+}
+
+/** Conifer: 7-sided cone, base radius 1 at y = 0, apex at y = 1 (no bottom). */
+export function coneGeometry(sides = 7): Geometry {
+  const tris: [V3, V3, V3][] = [];
+  for (let i = 0; i < sides; i++) {
+    const a0 = (i / sides) * Math.PI * 2, a1 = ((i + 1) / sides) * Math.PI * 2;
+    tris.push([[Math.cos(a0), 0, Math.sin(a0)], [Math.cos(a1), 0, Math.sin(a1)], [0, 1, 0]]);
+  }
+  return flatConvex(tris, [0, 0.3, 0]);
+}
+
 /** Flat square on y=0 centred at origin, position only. */
 export function planeGeometry(size: number): { vertices: Float32Array; indices: Uint16Array } {
   const h = size / 2;

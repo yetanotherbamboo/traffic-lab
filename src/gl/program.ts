@@ -59,6 +59,10 @@ export class Program {
     this.gl.uniform2f(this.loc(name), x, y);
     return this;
   }
+  vec4(name: string, x: number, y: number, z: number, w: number): this {
+    this.gl.uniform4f(this.loc(name), x, y, z, w);
+    return this;
+  }
   float(name: string, x: number): this {
     this.gl.uniform1f(this.loc(name), x);
     return this;

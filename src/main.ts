@@ -1,8 +1,9 @@
 import { FixedLoop } from './core/loop';
+import { generateCity } from './env/city';
+import { TEST_SEED, TEST_ZONE, buildTestNetwork } from './game/testScene';
 import { CameraController } from './input/cameraController';
 import { OrbitCamera } from './render/camera';
-import { buildTestNetwork, testBoxes } from './game/testScene';
-import { BOX_STRIDE, Renderer } from './render/renderer';
+import { Renderer } from './render/renderer';
 import { buildRoadMesh } from './render/roadMesh';
 
 const SIM_STEP = 0.1; // 10 Hz simulation tick
@@ -16,17 +17,23 @@ if (!gl) {
   throw new Error('WebGL2 unavailable');
 }
 
+const zone = TEST_ZONE;
 const camera = new OrbitCamera();
+camera.bounds = zone.hx * zone.contextScale;
+camera.maxDistance = 450;
 new CameraController(canvas, camera);
 
 const network = buildTestNetwork();
+const t0 = performance.now();
+const city = generateCity(network, zone, TEST_SEED);
+const genMs = performance.now() - t0;
 
 let renderer: Renderer;
 function initGL(): void {
   renderer = new Renderer(gl!);
-  const boxes = testBoxes();
-  renderer.boxes.setInstances(boxes, boxes.length / BOX_STRIDE);
+  renderer.setZone(zone);
   renderer.setRoads(buildRoadMesh(network));
+  renderer.setCity(city);
 }
 
 function resize(): void {
@@ -41,21 +48,25 @@ function resize(): void {
 
 let fps = 60;
 let hudTimer = 0;
+let time = 0;
 const loop = new FixedLoop(
   SIM_STEP,
   () => {
     /* simulation goes here (Milestone 3) */
   },
   (_alpha, frameDt) => {
+    time += frameDt;
     resize();
     camera.update(canvas.width / canvas.height);
-    renderer.render(camera, canvas.width, canvas.height);
+    renderer.render(camera, canvas.width, canvas.height, time);
 
     if (frameDt > 0) fps += (1 / frameDt - fps) * 0.05;
     hudTimer += frameDt;
     if (hudTimer > 0.25) {
       hudTimer = 0;
-      hud.textContent = `${fps.toFixed(0)} fps · ${renderer.drawCalls} draws · ${canvas.width}×${canvas.height}`;
+      hud.textContent =
+        `${fps.toFixed(0)} fps · ${renderer.drawCalls} draws · ${canvas.width}×${canvas.height}\n` +
+        `${city.lots.length} lots · city ${genMs.toFixed(0)} ms`;
     }
   },
 );
@@ -74,7 +85,6 @@ try {
   initGL();
   loop.start();
 } catch (err) {
-  hud.style.whiteSpace = 'pre-wrap';
   hud.textContent = `Startup error:\n${err instanceof Error ? err.message : String(err)}`;
   throw err;
 }

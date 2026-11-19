@@ -136,10 +136,14 @@ _Last updated: 2026-11-19_
 ### Done
 - [x] **0. Environment setup:** Node via nvm, Vite + TS (strict) + Vitest, git. Verified on laptop and phone.
 - [x] **1. Engine core:** math, GL wrapper, fixed-step loop, orbit camera, touch/mouse controls, FPS HUD. Verified on phone: 60–68 fps. The two-finger rotate inversion is fixed.
-- [x] **2. Road network and road meshes:** Bezier segments, lane profiles, junctions (3+ arms, and 2-arm bends), shader lane markings, kerbs, sidewalks, rounded corners. Tests pass; awaiting phone check.
+- [x] **2. Road network and road meshes:** Bezier segments, lane profiles, junctions (3+ arms, and 2-arm bends), shader lane markings, kerbs, sidewalks, rounded corners. Verified on phone.
+- [x] **2b. Environment and visual style:**
+  - **City generation:** seeded generator in `src/env/city.ts`. Lots line both sides of every street (houses with gable roofs, shops, mid-rises, parks); street trees and yard trees fill the rest.
+  - **Look:** shader-drawn windows (a few warmly lit), soft blob shadows, palette in `src/env/style.ts`.
+  - **Construction zone:** `src/env/zone.ts` and the `COMMON` shader chunk. Full colour inside with the build grid and a pulsing border line; outside, a desaturated, darker context ring fading to the background.
+  - **Status:** tests pass; awaiting phone check.
 
 ### Next
-- [ ] **2b. Environment and visual style:** seeded procedural buildings, trees, parks; the construction-zone and context-ring treatment.
 - [ ] **3. Traffic simulation v1.**
 
 ### Known issues / tech debt
@@ -147,6 +151,8 @@ _Last updated: 2026-11-19_
 - **Straight 2-road nodes:** they aren't treated as junctions, so joining two different lane profiles there leaves a visible seam.
 - **Dead ends:** roads have no end caps.
 - **Junction markings:** there are no stop lines or crosswalks yet.
-- **Placeholder scene:** the boxes in `src/game/testScene.ts` are temporary and will be replaced in 2b.
+- **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.
+- **Demolition:** construction-zone lots are flagged (`Lot.inZone`), but demolition cost and the sink animation are deferred to the editor (Milestone 5).
+- **City generation speed:** it runs on the main thread at startup (time shown in the HUD). Move it to a worker if it grows.
 - **Unconfirmed control:** the mouse right-drag rotate direction hasn't been checked by the user.
 - **Hand-ordered arms:** junction arms are ordered by angle. Overlapping or self-intersecting roads aren't validated (an editor milestone task).

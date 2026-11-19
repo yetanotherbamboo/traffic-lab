@@ -1,43 +1,56 @@
-import { type Vec3, vec3 } from '../core/math';
-import { Mesh } from '../gl/mesh';
+import { type City, type KitName, LIT_STRIDE, SHADOW_STRIDE } from '../env/city';
+import { BACKGROUND, GROUND_BOUNCE, SKY_COLOR, SUN_COLOR, SUN_DIR } from '../env/style';
+import type { Zone } from '../env/zone';
+import { type Attrib, Mesh } from '../gl/mesh';
 import { Program } from '../gl/program';
 import type { OrbitCamera } from './camera';
-import { boxGeometry, planeGeometry } from './geometry';
+import { type Geometry, boxGeometry, coneGeometry, crownGeometry, planeGeometry, roofGeometry } from './geometry';
 import type { MeshData } from './roadMesh';
-import { groundFS, groundVS, litFS, litInstancedVS, roadFS, roadVS } from './shaders';
+import { groundFS, groundVS, litFS, litInstancedVS, roadFS, roadVS, shadowFS, shadowVS } from './shaders';
 
-export const BACKGROUND: Vec3 = [0.14, 0.145, 0.18];
-const SUN_DIR = vec3.normalize([0.45, 0.8, 0.35]);
-const SUN_COLOR: Vec3 = [1.0, 0.92, 0.8];
-const SKY_COLOR: Vec3 = [0.85, 0.9, 1.0];
-const GROUND_BOUNCE: Vec3 = [0.6, 0.55, 0.45];
+export { BACKGROUND };
 
-/** Floats per box instance: posRot(4) + scale(3) + color(3). */
-export const BOX_STRIDE = 10;
+const POS_NORMAL: Attrib[] = [{ loc: 0, size: 3 }, { loc: 1, size: 3 }];
+const LIT_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 4, size: 3 }, { loc: 5, size: 3 }, { loc: 8, size: 1 }];
+const SHADOW_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 4, size: 2 }, { loc: 5, size: 2 }];
+const KITS: Record<KitName, () => Geometry> = {
+  box: boxGeometry, roof: roofGeometry, crown: crownGeometry, cone: coneGeometry,
+};
 
 export class Renderer {
   private readonly groundProg: Program;
-  private readonly litProg: Program;
-  private readonly ground: Mesh;
   private readonly roadProg: Program;
+  private readonly litProg: Program;
+  private readonly shadowProg: Program;
+  private readonly ground: Mesh;
+  private readonly kits: Record<KitName, Mesh>;
+  private readonly shadows: Mesh;
   private roads: Mesh | null = null;
-  readonly boxes: Mesh;
+  private zone: Zone = { cx: 0, cz: 0, hx: 1e5, hz: 1e5, radius: 0, contextScale: 2 };
   drawCalls = 0;
 
   constructor(private readonly gl: WebGL2RenderingContext) {
     this.groundProg = new Program(gl, groundVS, groundFS, 'ground');
-    this.litProg = new Program(gl, litInstancedVS, litFS, 'lit');
     this.roadProg = new Program(gl, roadVS, roadFS, 'road');
+    this.litProg = new Program(gl, litInstancedVS, litFS, 'lit');
+    this.shadowProg = new Program(gl, shadowVS, shadowFS, 'shadow');
 
     const plane = planeGeometry(4000);
     this.ground = new Mesh(gl, plane.vertices, [{ loc: 0, size: 3 }], plane.indices);
 
-    const box = boxGeometry();
-    this.boxes = new Mesh(gl, box.vertices, [{ loc: 0, size: 3 }, { loc: 1, size: 3 }], box.indices, [
-      { loc: 3, size: 4 },
-      { loc: 4, size: 3 },
-      { loc: 5, size: 3 },
-    ]);
+    const quad = planeGeometry(1);
+    this.shadows = new Mesh(gl, quad.vertices, [{ loc: 0, size: 3 }], quad.indices, SHADOW_INSTANCE);
+
+    const kits = {} as Record<KitName, Mesh>;
+    for (const [name, make] of Object.entries(KITS) as [KitName, () => Geometry][]) {
+      const g = make();
+      kits[name] = new Mesh(gl, g.vertices, POS_NORMAL, g.indices, LIT_INSTANCE);
+    }
+    this.kits = kits;
+  }
+
+  setZone(zone: Zone): void {
+    this.zone = zone;
   }
 
   setRoads(data: MeshData): void {
@@ -47,7 +60,31 @@ export class Renderer {
     ], data.indices);
   }
 
-  render(cam: OrbitCamera, width: number, height: number): void {
+  setCity(city: City): void {
+    for (const name of Object.keys(this.kits) as KitName[]) {
+      const data = city.kits[name];
+      this.kits[name].setInstances(data, data.length / LIT_STRIDE);
+    }
+    this.shadows.setInstances(city.shadows, city.shadows.length / SHADOW_STRIDE);
+  }
+
+  /** Uniforms shared by every program (unused ones are silently ignored by WebGL). */
+  private common(p: Program, cam: OrbitCamera, time: number): Program {
+    const z = this.zone;
+    return p.use()
+      .mat4('uViewProj', cam.viewProj)
+      .vec3('uCamPos', cam.eye)
+      .vec3('uBg', BACKGROUND)
+      .vec2('uFog', cam.distance * 2.2, cam.distance * 6)
+      .vec3('uSunDir', SUN_DIR)
+      .vec3('uSunColor', SUN_COLOR)
+      .vec3('uSkyColor', SKY_COLOR)
+      .vec3('uGroundColor', GROUND_BOUNCE)
+      .vec4('uZone', z.cx, z.cz, z.hx, z.hz)
+      .vec3('uZoneShape', [z.radius, z.contextScale, time]);
+  }
+
+  render(cam: OrbitCamera, width: number, height: number, time: number): void {
     const gl = this.gl;
     this.drawCalls = 0;
     gl.viewport(0, 0, width, height);
@@ -55,42 +92,34 @@ export class Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
 
-    const fogStart = cam.distance * 1.6;
-    const fogEnd = cam.distance * 4.5;
-
-    this.groundProg.use()
-      .mat4('uViewProj', cam.viewProj)
-      .vec3('uCamPos', cam.eye)
-      .vec3('uFogColor', BACKGROUND)
-      .vec2('uFog', fogStart, fogEnd);
+    this.common(this.groundProg, cam, time);
     this.ground.draw();
     this.drawCalls++;
 
-    this.litProg.use()
-      .mat4('uViewProj', cam.viewProj)
-      .vec3('uCamPos', cam.eye)
-      .vec3('uFogColor', BACKGROUND)
-      .vec2('uFog', fogStart, fogEnd)
-      .vec3('uSunDir', SUN_DIR)
-      .vec3('uSunColor', SUN_COLOR)
-      .vec3('uSkyColor', SKY_COLOR)
-      .vec3('uGroundColor', GROUND_BOUNCE);
-    this.boxes.draw();
-    this.drawCalls++;
-
     if (this.roads) {
-      this.roadProg.use()
-        .mat4('uViewProj', cam.viewProj)
-        .vec3('uCamPos', cam.eye)
-        .vec3('uFogColor', BACKGROUND)
-        .vec2('uFog', fogStart, fogEnd)
-        .vec3('uSunDir', SUN_DIR)
-        .vec3('uSunColor', SUN_COLOR)
-        .vec3('uSkyColor', SKY_COLOR)
-        .vec3('uGroundColor', GROUND_BOUNCE);
+      this.common(this.roadProg, cam, time);
       this.roads.draw();
       this.drawCalls++;
     }
+
+    this.common(this.litProg, cam, time);
+    for (const kit of Object.values(this.kits)) {
+      if (kit.instanceCount === 0) continue;
+      kit.draw();
+      this.drawCalls++;
+    }
+
+    // Soft contact shadows last: blended, depth-tested but not written.
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    this.common(this.shadowProg, cam, time);
+    this.shadows.draw();
+    this.drawCalls++;
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
   }
 }

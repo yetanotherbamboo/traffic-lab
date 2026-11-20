@@ -2,7 +2,7 @@ import type { Vec3 } from '../core/math';
 import { KIND_EMISSIVE, KIND_PLAIN, LIT_STRIDE } from '../env/city';
 import { rightOf } from '../network/network';
 import { type JunctionModel, SIGNAL_GREEN, SIGNAL_RED, type SignalController } from '../sim/junctions';
-import { type LaneGraph, TURN_BIT } from '../sim/laneGraph';
+import { type Lane, type LaneGraph, TURN_BIT } from '../sim/laneGraph';
 import type { TrafficSim } from '../sim/traffic';
 import { GLOW_STRIDE } from './lights';
 
@@ -30,6 +30,12 @@ interface Lamp {
   z: number;
   heading: number;
   dir: Vec3;
+}
+
+/** The path a non-stop lane's markings follow through the junction: straight on, or its only path. */
+function mainPath(graph: LaneGraph, l: Lane): Lane | null {
+  const conns = l.next.map((c) => graph.lanes[c]!);
+  return conns.find((c) => c.turn === 'straight') ?? (conns.length === 1 ? conns[0]! : null);
 }
 
 /**
@@ -165,7 +171,7 @@ export class JunctionProps {
     box: (p: Vec3, heading: number, scale: Vec3, color: Vec3) => void): void {
     const l = graph.lanes[id]!;
     const conns = l.next.map((c) => graph.lanes[c]!);
-    const C = conns.find((c) => c.turn === 'straight') ?? (conns.length === 1 ? conns[0]! : null);
+    const C = mainPath(graph, l);
     if (!C) return;
     const group = graph.groups[l.group]!;
     const seg = graph.net.segment(l.segment);
@@ -194,7 +200,16 @@ export class JunctionProps {
     };
     // Left side.
     if (l.index === 0) {
-      if (twoWay) line(-hw + 0.14, 0.12, CENTRE_PAINT, false);
+      if (twoWay) {
+        // Nothing crosses a non-stop lane, so the centre line beside it is a full double line.
+        // Its far half belongs to the oncoming lane alongside: drawn here unless that lane is
+        // non-stop too and draws its own (both halves would land on the same spot).
+        line(-hw + 0.14, 0.12, CENTRE_PAINT, false);
+        const exitSeg = graph.lanes[C.next[0]!]!.segment;
+        const partner = graph.lanes.find((o) => o.kind === 'road' && o.segment === exitSeg && o.toNode === l.toNode && o.index === 0);
+        const drawsOwn = partner !== undefined && junctions.free[partner.id] === 1 && mainPath(graph, partner) !== null;
+        if (!drawsOwn) line(-hw - 0.14, 0.12, CENTRE_PAINT, false);
+      }
       else if (!turns.has('left')) line(-hw + 0.35, 0.16, PAINT, false);
     } else if (!freeLane(l.index - 1)) {
       line(-hw, 0.14, PAINT, false);

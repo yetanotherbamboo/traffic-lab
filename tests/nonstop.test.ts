@@ -188,23 +188,39 @@ describe('non-stop lanes', () => {
     expect(res.heldElsewhere).toBeGreaterThan(0);
   });
 
-  it('paints the lane through the junction instead of a stop line', () => {
-    const yellow = (net: RoadNetwork): number => {
+  it('paints the lane through the junction instead of a stop line, with a double centre line', () => {
+    /** Yellow paint pieces near the junction (centres, x z). */
+    const yellow = (net: RoadNetwork): Vec3[] => {
       const p = new JunctionProps(new TrafficSim(new LaneGraph(net), [], 1));
       const n = p.update();
-      let k = 0;
+      const out: Vec3[] = [];
       for (let i = 0; i < n; i++) {
         const o = i * 11;
         const at: Vec3 = [p.buffer[o]!, 0, p.buffer[o + 2]!];
         const paint = Math.abs(p.buffer[o + 7]! - 0.95) + Math.abs(p.buffer[o + 8]! - 0.78) + Math.abs(p.buffer[o + 9]! - 0.35) < 1e-3;
-        if (paint && Math.hypot(at[0], at[2]) < 15) k++;
+        if (paint && Math.hypot(at[0], at[2]) < 15) out.push(at);
       }
-      return k;
+      return out;
     };
+    /** Distinct sideways offsets (z, the main road runs along x) of the yellow stripes. */
+    const stripes = (pts: Vec3[]): number[] => [...new Set(pts.map((q) => Math.round(q[2] * 100) / 100))].sort((a, b) => a - b);
+
     const t = rightInTee();
     setControl(t.net, t.centre, 'signal');
-    expect(yellow(t.net)).toBe(0);
+    expect(yellow(t.net).length).toBe(0);
+    // Only the far lane is non-stop: it still gets both halves of the centre line.
     setFreeFlow(t.net, t.centre, true);
-    expect(yellow(t.net)).toBeGreaterThan(5);
+    const one = yellow(t.net);
+    expect(one.length).toBeGreaterThan(5);
+    expect(stripes(one)).toEqual([-0.14, 0.14]);
+
+    // Both directions non-stop: still one double line, with no stripe painted twice.
+    const b = tee(STREET, ONE_WAY_OUT);
+    setTurns(b.net, b.eastSeg, b.centre, 0, TURN_STRAIGHT);
+    setFreeFlow(b.net, b.centre, true);
+    const both = yellow(b.net);
+    expect(stripes(both)).toEqual([-0.14, 0.14]);
+    const keys = both.map((q) => `${q[0].toFixed(2)},${q[2].toFixed(2)}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

@@ -150,14 +150,33 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
   }
 
   const hit = intersectXZ(P, a.dir, Q, c.dir);
-  const ctrl: Vec3 = hit && hit[0] < 0 && hit[1] < 0
-    ? vec3.add(P, vec3.scale(a.dir, hit[0]))
-    : vec3.scale(vec3.add(P, Q), 0.5);
-  const pts: Vec3[] = [];
-  for (let k = 0; k <= samples; k++) {
-    const t = k / samples, u = 1 - t;
-    pts.push(vec3.add(vec3.add(vec3.scale(P, u * u), vec3.scale(ctrl, 2 * u * t)), vec3.scale(Q, t * t)));
+  if (!hit || hit[0] >= 0 || hit[1] >= 0) {
+    const pts: Vec3[] = [];
+    for (let k = 0; k <= samples; k++) pts.push(vec3.add(P, vec3.scale(vec3.sub(Q, P), k / samples)));
+    return pts;
   }
+  // Circular fillet tangent to both kerb lines (a quadratic curve would bend tighter than the
+  // sidewalk is wide at sharp corners, folding the corner sidewalk over itself).
+  const X = vec3.add(P, vec3.scale(a.dir, hit[0]));
+  const La = -hit[0], Lc = -hit[1];
+  const L = Math.min(La, Lc);
+  const half = Math.acos(Math.max(-1, Math.min(1, vec3.dot(a.dir, c.dir)))) / 2; // half the angle at X
+  const T1 = vec3.add(X, vec3.scale(a.dir, L));
+  const T2 = vec3.add(X, vec3.scale(c.dir, L));
+  const bis = horizontal(vec3.add(a.dir, c.dir));
+  const C = vec3.add(X, vec3.scale(bis, L / Math.cos(half)));
+  const a1 = Math.atan2(T1[2] - C[2], T1[0] - C[0]);
+  let a2 = Math.atan2(T2[2] - C[2], T2[0] - C[0]);
+  if (a2 - a1 > Math.PI) a2 -= Math.PI * 2;
+  if (a1 - a2 > Math.PI) a2 += Math.PI * 2;
+  const r = Math.hypot(T1[0] - C[0], T1[2] - C[2]);
+  const pts: Vec3[] = [];
+  if (La > L + 0.01) pts.push(P);
+  for (let k = 0; k <= samples; k++) {
+    const th = a1 + ((a2 - a1) * k) / samples;
+    pts.push([C[0] + Math.cos(th) * r, P[1], C[2] + Math.sin(th) * r]);
+  }
+  if (Lc > L + 0.01) pts.push(Q);
   return pts;
 }
 

@@ -193,13 +193,13 @@ _Last updated: 2026-11-20_
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**
 
 ### Known issues / tech debt
-- **Junction sizing:** `RoadNetwork.junctionRadius` is a heuristic sized for roughly perpendicular crossings. Acute angles can make corners overlap.
+- **Junction sizing:** each road end is trimmed separately (`RoadNetwork.armTrim`): at least the base size for perpendicular crossings, and at acute angles far enough that neighbouring sidewalk edges don't overlap. Corners are circular fillets. The edge test uses the road direction at the node, so strongly curved roads right at a junction could still clip.
 - **Dead ends:** roads have no end caps. Vehicles that end up on a player-made dead end (only via a forced fallback move) are removed there; there are no U-turns.
 - **Junction markings:** there are no stop lines or crosswalks yet.
 - **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.
 - **Demolished lots stay empty:** removing a road doesn't regrow buildings.
 - **No node dragging:** junctions can't be moved yet; delete and redraw instead. Leftover straight 2-road nodes (after deleting a crossing road) aren't merged back.
-- **Acute junction corners:** validation rejects angles under 25°, but roads meeting at 25–40° can still show overlapping sidewalk corners.
+- **Widening roads demolishes frontage:** adding lanes pushes sidewalks into lots, which are demolished (and paid for) immediately. The lanes panel has no cost preview.
 - **Lane-mapping on edits:** vehicles inside a junction whose connector no longer exists are removed rather than re-routed.
 - **Preview cost on phones:** each drag move clones the network, validates and rebuilds the road mesh, about 3 ms on a laptop. Watch for lag on the phone.
 - **Deadlock breaker:** when it fires, a stuck vehicle creeps through, which can cause a brief visual overlap. This is rare at nominal demand and more frequent when the network is oversaturated (1.5× demand: a few samples per 20 minutes).

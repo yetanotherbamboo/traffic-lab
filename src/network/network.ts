@@ -72,6 +72,9 @@ export interface Arm {
   angle: number;
 }
 
+/** Extra length beyond the point where neighbouring sidewalk edges meet, for a rounded kerb. */
+const KERB_ROOM = 3;
+
 export const horizontal = (v: Vec3): Vec3 => vec3.normalize([v[0], 0, v[2]]);
 export const rightOf = (d: Vec3): Vec3 => [-d[2], 0, d[0]];
 
@@ -242,15 +245,10 @@ export class RoadNetwork {
       || p0.laneWidth !== p1.laneWidth || p0.sidewalk !== p1.sidewalk;
   }
 
-  /**
-   * Distance from the node centre at which connected roads stop and the junction surface begins.
-   * Simple heuristic sized for roughly perpendicular crossings; refined in the editor milestone.
-   */
-  junctionRadius(nodeId: number): number {
-    const n = this.node(nodeId);
-    if (!this.isJunction(nodeId)) return 0;
+  /** Base junction size: sized for roughly perpendicular crossings of the widest road. */
+  private baseRadius(nodeId: number): number {
     let half = 0, walk = 0;
-    for (const sid of n.segments) {
+    for (const sid of this.node(nodeId).segments) {
       const p = this.segments.get(sid)!.profile;
       half = Math.max(half, Math.max(p.forward, p.backward) * p.laneWidth);
       walk = Math.max(walk, p.sidewalk);
@@ -258,10 +256,56 @@ export class RoadNetwork {
     return half + walk + 3;
   }
 
+  /**
+   * Distance from the node centre at which road `segId` stops and the junction surface begins.
+   * At least the base size; at acute angles a road is pulled back until its outer sidewalk edge
+   * clears the neighbouring roads' edges (plus room for a rounded kerb), so sidewalks never overlap.
+   */
+  armTrim(nodeId: number, segId: number): number {
+    if (!this.isJunction(nodeId)) return 0;
+    const base = this.baseRadius(nodeId);
+    const arms = this.node(nodeId).segments.map((sid) => {
+      const seg = this.segments.get(sid)!;
+      const dir = this.leaveDir(seg, nodeId);
+      const { incoming, outgoing } = this.lanesAt(seg, nodeId);
+      const { laneWidth: w, sidewalk: sw } = seg.profile;
+      // Outward frame: outgoing lanes are on the right, incoming on the left.
+      return { id: sid, dir, right: rightOf(dir), L: incoming * w + sw, R: outgoing * w + sw, angle: Math.atan2(dir[2], dir[0]) };
+    }).sort((p, q) => p.angle - q.angle);
+    const n = arms.length;
+    const i = arms.findIndex((a) => a.id === segId);
+    if (i < 0 || n < 2) return base;
+    let trim = base;
+    const pair = (a: (typeof arms)[number], c: (typeof arms)[number], mine: 'a' | 'c'): void => {
+      let gap = c.angle - a.angle;
+      if (gap <= 0) gap += Math.PI * 2;
+      if (gap >= Math.PI - 0.05) return; // edges diverge: no constraint
+      // Right outer edge of a: t·dirA + R_a·rightA; left outer edge of c: u·dirC − L_c·rightC.
+      const px = a.right[0] * a.R, pz = a.right[2] * a.R;
+      const qx = -c.right[0] * c.L, qz = -c.right[2] * c.L;
+      const den = a.dir[0] * -c.dir[2] - a.dir[2] * -c.dir[0];
+      if (Math.abs(den) < 1e-6) return;
+      const rx = qx - px, rz = qz - pz;
+      const t = (rx * -c.dir[2] - rz * -c.dir[0]) / den;
+      const u = (a.dir[0] * rz - a.dir[2] * rx) / den;
+      const d = mine === 'a' ? t : u;
+      if (d > 0) trim = Math.max(trim, d + KERB_ROOM);
+    };
+    pair(arms[i]!, arms[(i + 1) % n]!, 'a');
+    pair(arms[(i - 1 + n) % n]!, arms[i]!, 'c');
+    return trim;
+  }
+
+  /** Largest distance from the node centre to where its roads begin (size of the junction area). */
+  junctionRadius(nodeId: number): number {
+    if (!this.isJunction(nodeId)) return 0;
+    return Math.max(...this.node(nodeId).segments.map((s) => this.armTrim(nodeId, s)));
+  }
+
   /** Arc-length range of the segment that is drawn as road (outside junction areas). */
   trimmedRange(seg: RoadSegment): [number, number] {
-    const s0 = this.junctionRadius(seg.a);
-    const s1 = seg.curve.length - this.junctionRadius(seg.b);
+    const s0 = this.armTrim(seg.a, seg.id);
+    const s1 = seg.curve.length - this.armTrim(seg.b, seg.id);
     return s1 > s0 ? [s0, s1] : [seg.curve.length / 2, seg.curve.length / 2];
   }
 

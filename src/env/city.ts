@@ -75,6 +75,9 @@ interface Corridor {
   bx: number;
   bz: number;
   r: number;
+  /** Asphalt extent right / left of the centreline (no sidewalk, no clearance). */
+  raR: number;
+  raL: number;
   seg: number;
 }
 
@@ -85,7 +88,8 @@ function distToSegment(px: number, pz: number, c: Corridor): number {
   return Math.hypot(px - (c.ax + dx * t), pz - (c.az + dz * t));
 }
 
-export type MaskPart = 'all' | 'roads' | 'junctions';
+/** 'roads' = road corridors incl. sidewalks, 'asphalt' = carriageways only, 'junctions' = junction areas. */
+export type MaskPart = 'all' | 'roads' | 'asphalt' | 'junctions';
 
 /** Answers "is this ground point on a road / junction?" quickly via a spatial hash. */
 class RoadMask {
@@ -95,12 +99,13 @@ class RoadMask {
   constructor(net: RoadNetwork, clearance: number) {
     for (const seg of net.segments.values()) {
       const { forward, backward, laneWidth, sidewalk } = seg.profile;
-      const r = Math.max(forward, backward) * laneWidth + sidewalk + clearance;
+      const raR = forward * laneWidth, raL = backward * laneWidth;
+      const r = Math.max(raR, raL) + sidewalk + clearance;
       const n = Math.max(1, Math.ceil(seg.curve.length / 4));
       let prev = seg.curve.point(0);
       for (let k = 1; k <= n; k++) {
         const p = seg.curve.point(seg.curve.tAtDistance((seg.curve.length * k) / n));
-        this.insert({ ax: prev[0], az: prev[2], bx: p[0], bz: p[2], r, seg: seg.id });
+        this.insert({ ax: prev[0], az: prev[2], bx: p[0], bz: p[2], r, raR, raL, seg: seg.id });
         prev = p;
       }
     }
@@ -133,10 +138,19 @@ class RoadMask {
     if (use !== 'junctions') {
       const list = this.cells.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`);
       if (list) {
-        for (const c of list) if (c.seg !== ignoreSeg && distToSegment(x, z, c) < c.r + extra) return true;
+        for (const c of list) {
+          if (c.seg === ignoreSeg) continue;
+          let reach = c.r;
+          if (use === 'asphalt') {
+            // Which side of the centreline: right of the direction a → b is (-dz, dx).
+            const side = -(c.bz - c.az) * (x - c.ax) + (c.bx - c.ax) * (z - c.az);
+            reach = side >= 0 ? c.raR : c.raL;
+          }
+          if (distToSegment(x, z, c) < reach + extra) return true;
+        }
       }
     }
-    if (use !== 'roads') {
+    if (use === 'all' || use === 'junctions') {
       for (const [dx, dz, r] of this.disks) if (Math.hypot(x - dx, z - dz) < r + extra) return true;
     }
     return false;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../src/core/math';
+import { itemsHitByRoads } from '../src/env/city';
 import { zoneDistance } from '../src/env/zone';
 import { Editor, ROAD_PRESETS } from '../src/editor/editor';
 import { addRoad, bendRoad, deleteRoad, setLanes, setTurns } from '../src/editor/ops';
@@ -8,7 +9,8 @@ import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
 import { World } from '../src/game/world';
-import { type LaneProfile, RoadNetwork, TURN_LEFT } from '../src/network/network';
+import { type LaneProfile, RoadNetwork, TURN_LEFT, rightOf } from '../src/network/network';
+import { ROAD_STRIDE } from '../src/render/roadMesh';
 import { buildRoadMesh } from '../src/render/roadMesh';
 import { LaneGraph } from '../src/sim/laneGraph';
 import { TrafficSim } from '../src/sim/traffic';
@@ -150,6 +152,79 @@ describe('edit operations', () => {
   });
 });
 
+describe('acute junctions', () => {
+  /** A junction with roads at the given angles (degrees), all Avenues 100 m long. */
+  function star(angles: number[]) {
+    const net = new RoadNetwork();
+    const c = net.addNode([0, 0, 0]);
+    for (const a of angles) {
+      const r = (a * Math.PI) / 180;
+      net.addSegment(c, net.addNode([Math.cos(r) * 100, 0, Math.sin(r) * 100]), AVENUE);
+    }
+    return { net, c };
+  }
+
+  /** Outer sidewalk edge (right or left of the outward direction) along a road's drawn part. */
+  function edge(net: RoadNetwork, segId: number, node: number, side: 1 | -1): [number, number][] {
+    const seg = net.segment(segId);
+    const [s0, s1] = net.trimmedRange(seg);
+    const out: [number, number][] = [];
+    const outward = seg.a === node;
+    const ext = Math.max(seg.profile.forward, seg.profile.backward) * seg.profile.laneWidth + seg.profile.sidewalk;
+    for (let k = 0; k <= 40; k++) {
+      const s = s0 + ((s1 - s0) * k) / 40;
+      const t = seg.curve.tAtDistance(s);
+      const p = seg.curve.point(t), d = seg.curve.derivative(t), l = Math.hypot(d[0], d[2]);
+      const dir: [number, number, number] = outward ? [d[0] / l, 0, d[2] / l] : [-d[0] / l, 0, -d[2] / l];
+      const r = rightOf(dir);
+      out.push([p[0] + r[0] * ext * side, p[2] + r[2] * ext * side]);
+    }
+    return out;
+  }
+
+  function crosses(a: [number, number][], b: [number, number][]): boolean {
+    for (let i = 0; i + 1 < a.length; i++) {
+      for (let j = 0; j + 1 < b.length; j++) {
+        const [p, q, r, s] = [a[i]!, a[i + 1]!, b[j]!, b[j + 1]!];
+        const d = (q[0] - p[0]) * (s[1] - r[1]) - (q[1] - p[1]) * (s[0] - r[0]);
+        if (Math.abs(d) < 1e-9) continue;
+        const u = ((r[0] - p[0]) * (s[1] - r[1]) - (r[1] - p[1]) * (s[0] - r[0])) / d;
+        const v = ((r[0] - p[0]) * (q[1] - p[1]) - (r[1] - p[1]) * (q[0] - p[0])) / d;
+        if (u >= 0 && u <= 1 && v >= 0 && v <= 1) return true;
+      }
+    }
+    return false;
+  }
+
+  for (const angles of [[0, 30, 180], [0, 40, 200, 270], [0, 28], [0, 60, 120, 240]]) {
+    it(`keeps sidewalks of neighbouring roads apart (${angles.join('°, ')}°)`, () => {
+      const { net, c } = star(angles);
+      const arms = net.arms(c);
+      for (let i = 0; i < arms.length; i++) {
+        const a = arms[i]!, b = arms[(i + 1) % arms.length]!;
+        // Right edge of one road vs the left edge of the next one (counter-clockwise).
+        expect(crosses(edge(net, a.segment.id, c, 1), edge(net, b.segment.id, c, -1))).toBe(false);
+      }
+      // Junction surface and corners still face upwards.
+      const mesh = buildRoadMesh(net);
+      const V = mesh.vertices, S = ROAD_STRIDE;
+      for (let t = 0; t < mesh.indices.length; t += 3) {
+        const [p, q, r] = [mesh.indices[t]!, mesh.indices[t + 1]!, mesh.indices[t + 2]!];
+        if (V[p * S + 4]! < 0.99) continue;
+        const e1 = [V[q * S]! - V[p * S]!, V[q * S + 2]! - V[p * S + 2]!];
+        const e2 = [V[r * S]! - V[p * S]!, V[r * S + 2]! - V[p * S + 2]!];
+        expect(e1[1]! * e2[0]! - e1[0]! * e2[1]!).toBeGreaterThanOrEqual(-1e-6);
+      }
+    });
+  }
+
+  it('leaves right-angle junctions the same size as before', () => {
+    const { net, c } = star([0, 90, 180, 270]);
+    // Base size: widest half carriageway (2 × 3.5) + sidewalk 2.5 + 3.
+    for (const a of net.arms(c)) expect(net.armTrim(c, a.segment.id)).toBeCloseTo(12.5, 6);
+  });
+});
+
 describe('live editing', () => {
   const makeWorld = () => new World(buildTestNetwork(), zone, TEST_SEED, testSpawners);
 
@@ -195,6 +270,22 @@ describe('live editing', () => {
     expect(JSON.stringify(w.net.toData())).toBe(data);
     ed.redo();
     expect(w.demolished.size).toBeGreaterThan(0);
+  });
+
+  it('removes street trees that a widened road would put on the asphalt', () => {
+    const w = makeWorld();
+    const ed = new Editor(w);
+    const onRoad = () => itemsHitByRoads(w.city, w.net, zone, 'asphalt').filter((id) => !w.demolished.has(id));
+    expect(onRoad()).toEqual([]);
+    const centre = [...w.net.nodes.values()].find((x) => x.pos[0] === 0 && x.pos[2] === 0)!;
+    const west = w.net.arms(centre.id).find((a) => a.dir[0] < -0.9)!.segment;
+    const trees = () => [...w.demolished].filter((id) => w.city.items[id]!.kind === 'tree').length;
+    expect(ed.apply((n) => setLanes(n, west.id, 3, 3))).toBeNull();
+    expect(trees()).toBeGreaterThan(0);
+    expect(onRoad()).toEqual([]);
+    // A new crossing street keeps the invariant too.
+    expect(ed.apply((n) => addRoad(n, free(40, -45), free(40, 45), STREET))).toBeNull();
+    expect(onRoad()).toEqual([]);
   });
 
   it('charges nothing and demolishes nothing for a signal-only change', () => {

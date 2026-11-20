@@ -54,8 +54,9 @@ export class World implements EditorHost {
   private standing: { version: number; ids: Set<number> } = { version: -1, ids: new Set() };
 
   /**
-   * What the candidate's roads demolish: items on new road space, plus anything inside a junction
-   * area (even a street tree that stood on the sidewalk of a road that is now crossed).
+   * What the candidate's roads demolish: items on new road space, plus anything on asphalt or
+   * inside a junction area (e.g. a street tree whose sidewalk became a lane when the road was
+   * widened, or that stood next to a road that is now crossed).
    */
   demolition(candidate: RoadNetwork): { items: number[]; cost: number } {
     if (this.standing.version !== this.version) {
@@ -63,6 +64,7 @@ export class World implements EditorHost {
     }
     const hit = new Set(itemsHitByRoads(this.city, candidate, this.zone, 'roads').filter((id) => !this.standing.ids.has(id)));
     for (const id of itemsHitByRoads(this.city, candidate, this.zone, 'junctions')) hit.add(id);
+    for (const id of itemsHitByRoads(this.city, candidate, this.zone, 'asphalt')) hit.add(id);
     const items = [...hit].filter((id) => !this.demolished.has(id)).sort((a, b) => a - b);
     return { items, cost: demolitionCost(items.map((id) => this.city.items[id]!)) };
   }

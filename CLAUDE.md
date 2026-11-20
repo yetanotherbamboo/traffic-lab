@@ -9,6 +9,7 @@ Node is installed via nvm, so non-interactive shells need: `export NVM_DIR="$HOM
 - `npm run dev`: dev server on `0.0.0.0:5173` (phone access over LAN)
 - `npm test`: Vitest (headless; `tests/**/*.test.ts`)
 - `npm run build`: typecheck + production bundle (reports gzip size)
+- **Deploy:** every push to `main` runs the tests, builds and publishes to GitHub Pages (`.github/workflows/deploy.yml`): https://yetanotherbamboo.github.io/traffic-lab/ (repo `yetanotherbamboo/traffic-lab`, public). Commits use the GitHub noreply email set in this repo's git config.
 
 ## Hard rules
 - **No runtime dependencies.** Don't use Three.js, Babylon, gl-matrix or UI frameworks; write it ourselves. Dev-only tools (Vite, TS, Vitest) are fine.

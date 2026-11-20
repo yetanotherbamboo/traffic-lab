@@ -37,6 +37,29 @@ const controls = new CameraController(canvas, camera);
 const t0 = performance.now();
 const world = new World(buildTestNetwork(), zone, TEST_SEED, testSpawners);
 const genMs = performance.now() - t0;
+
+// ---------------------------------------------------------------- saving
+// The player's city (roads, demolished buildings, money spent) lives in this browser's storage,
+// saved after every change. Bump the key when the starting city changes, so old saves don't
+// replace the new one. Storage can be missing (private windows): the game then just doesn't save.
+const SAVE_KEY = 'traffic-lab:city:v1';
+const startCity = world.snapshot();
+const startJson = JSON.stringify(startCity);
+try {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (raw) world.restore(JSON.parse(raw));
+} catch {
+  world.restore(startCity); // unreadable save: start fresh
+  try { localStorage.removeItem(SAVE_KEY); } catch { /* no storage */ }
+}
+function saveCity(): void {
+  try {
+    const json = JSON.stringify(world.snapshot());
+    if (json === startJson) localStorage.removeItem(SAVE_KEY);
+    else localStorage.setItem(SAVE_KEY, json);
+  } catch { /* no storage, or full */ }
+}
+
 for (let i = 0; i < 900; i++) world.sim.step(SIM_STEP); // warm up 90 s so the streets aren't empty
 const vehicleData = new Float32Array(world.sim.capacity * LIT_STRIDE);
 const vanData = new Float32Array(world.sim.capacity * LIT_STRIDE);
@@ -51,6 +74,9 @@ let props = new JunctionProps(world.sim);
 // ---------------------------------------------------------------- editor
 const editor = new Editor(world);
 const ui = new EditorUI(editor, world);
+document.getElementById('reset')!.addEventListener('click', () => {
+  if (confirm('Reset the city to the start? Your roads are removed (Undo brings them back).')) editor.resetTo(startCity);
+});
 const overlay = new OverlayBuilder();
 
 /** Ground point under a screen position (CSS px) and a finger-sized tolerance there, in metres. */
@@ -107,6 +133,7 @@ function syncScene(): void {
     seenWorld = world.version;
     props = new JunctionProps(world.sim);
     renderer.setPaint(props.paint);
+    saveCity();
   }
   if (world.cityVersion !== seenCity) {
     seenCity = world.cityVersion;

@@ -501,3 +501,43 @@ describe('drawing roads by tapping start and end', () => {
     expect(ed.draft).toBeNull();
   });
 });
+
+describe('saving and resetting the city', () => {
+  it('a saved city (JSON, as in browser storage) comes back exactly after a reload', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.down([30, 0, 30], 1.5);
+    ed.move([30, 0, 55], 1.5);
+    ed.up();
+    const centre = [...w.net.nodes.values()].find((n) => n.pos[0] === 0 && n.pos[2] === 0)!;
+    expect(ed.apply((n) => { n.node(centre.id).control = 'signal'; n.node(centre.id).greens = { [n.node(centre.id).segments[0]!]: 35 }; })).toBeNull();
+    expect(w.spent).toBeGreaterThan(0);
+    const saved = JSON.stringify(w.snapshot());
+
+    // "Reload": a fresh world from the starting city, then the save on top.
+    const again = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    again.restore(JSON.parse(saved));
+    expect(JSON.stringify(again.snapshot())).toBe(saved);
+    expect(again.sim.junctions.control.get(centre.id)).toBe('signal');
+    expect(again.sim.junctions.signals.get(centre.id)!.phases.some((p) => p.green === 35)).toBe(true);
+    for (let i = 0; i < 300; i++) again.sim.step(0.1);
+    expect(again.sim.stats.vehicles).toBeGreaterThan(0);
+  });
+
+  it('reset goes back to the starting city in one undoable step', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const start = w.snapshot();
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.down([30, 0, 30], 1.5);
+    ed.move([30, 0, 55], 1.5);
+    ed.up();
+    const edited = JSON.stringify(w.snapshot());
+    expect(edited).not.toBe(JSON.stringify(start));
+    ed.resetTo(start);
+    expect(JSON.stringify(w.snapshot())).toBe(JSON.stringify(start));
+    ed.undo();
+    expect(JSON.stringify(w.snapshot())).toBe(edited);
+  });
+});

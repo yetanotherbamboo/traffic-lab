@@ -19,7 +19,7 @@ const ICONS: Record<string, string> = {
   redo: 'M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3',
 };
 
-const TOOLS: [Tool, string][] = [['view', 'Move'], ['road', 'Road'], ['bend', 'Bend'], ['select', 'Edit'], ['delete', 'Remove']];
+const TOOLS: [Tool, string][] = [['view', 'Move'], ['road', 'Build'], ['bend', 'Bend'], ['select', 'Edit'], ['delete', 'Remove']];
 
 const HINTS: Record<Tool, string> = {
   view: 'Drag to move · pinch or two fingers to zoom and turn',

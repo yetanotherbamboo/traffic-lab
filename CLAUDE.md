@@ -10,6 +10,7 @@ Node is installed via nvm, so non-interactive shells need: `export NVM_DIR="$HOM
 - `npm test`: Vitest (headless; `tests/**/*.test.ts`)
 - `npm run build`: typecheck + production bundle (reports gzip size)
 - **Deploy:** every push to `main` runs the tests, builds and publishes to GitHub Pages (`.github/workflows/deploy.yml`): https://yetanotherbamboo.github.io/traffic-lab/ (repo `yetanotherbamboo/traffic-lab`, public). Commits use the GitHub noreply email set in this repo's git config.
+- **Saves:** players' cities are kept in browser storage under `SAVE_KEY` in `src/main.ts`; bump its version when the starting city or the network data format changes incompatibly.
 
 ## Hard rules
 - **No runtime dependencies.** Don't use Three.js, Babylon, gl-matrix or UI frameworks; write it ourselves. Dev-only tools (Vite, TS, Vitest) are fine.

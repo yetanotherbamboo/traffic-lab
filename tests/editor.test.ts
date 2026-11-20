@@ -11,10 +11,10 @@ import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/gam
 import { World } from '../src/game/world';
 import { LIT_STRIDE } from '../src/env/city';
 import { JunctionProps } from '../src/render/junctionProps';
-import { type LaneProfile, RoadNetwork, TURN_LEFT, rightOf } from '../src/network/network';
+import { type LaneProfile, RoadNetwork, TURN_LEFT, TURN_RIGHT, TURN_STRAIGHT, rightOf } from '../src/network/network';
 import { ROAD_STRIDE } from '../src/render/roadMesh';
 import { buildRoadMesh } from '../src/render/roadMesh';
-import { LaneGraph } from '../src/sim/laneGraph';
+import { LaneGraph, TURN_BIT } from '../src/sim/laneGraph';
 import { TrafficSim } from '../src/sim/traffic';
 
 const STREET: LaneProfile = ROAD_PRESETS[0]!.profile;
@@ -319,9 +319,9 @@ describe('live editing', () => {
 });
 
 describe('turn arrows', () => {
-  it('are painted on every approach lane, inside the lane, also near close junctions and on bends', () => {
+  it('are painted on limited approach lanes, inside the lane, also near close junctions and on bends', () => {
     const net = zoned();
-    addRoad(net, free(-35, -40), free(-35, 40), STREET);
+    addRoad(net, free(-35, -40), free(-35, 40), AVENUE); // 2 lanes each way: inner and outer lanes are limited
     // A second street close to the arterial: the approaches between them are short.
     addRoad(net, free(-55, -18), free(-15, -18), STREET);
     // A third street makes the north piece a road between two junctions; bending it curves both approaches.
@@ -334,9 +334,12 @@ describe('turn arrows', () => {
     const props = new JunctionProps(sim);
     const lanes = sim.graph.lanes;
     const approaches = lanes.filter((l) => l.kind === 'road' && lanes[l.next[0] ?? -1]?.kind === 'connector' && net.node(lanes[l.next[0]!]!.node).segments.length >= 3);
-    // Lanes squeezed to (almost) nothing between two junctions have no room for paint.
-    expect(props.arrowLanes).toBe(approaches.filter((l) => l.path.length >= 5.5).length);
-    expect(approaches.some((l) => l.path.length < 14)).toBe(true); // the close-junction case is covered
+    // Arrows only on lanes limited to some directions (no arrow = any way); lanes squeezed to
+    // (almost) nothing between two junctions have no room for paint.
+    const mask = (l: (typeof lanes)[number]) => l.next.reduce((m, n) => m | TURN_BIT[lanes[n]!.turn ?? 'straight'], 0);
+    const limited = approaches.filter((l) => mask(l) !== sim.graph.armTurns.get(l.id));
+    expect(props.arrowLanes).toBe(limited.filter((l) => l.path.length >= 5.5).length);
+    expect(limited.some((l) => l.path.length >= 5.5 && l.path.length < 14)).toBe(true); // close junctions covered
 
     // Arrow stems (0.18 m wide, 1.8 m long: the base and the straight-ahead part) sit on a lane's
     // centre line, also on the curved approaches.
@@ -349,5 +352,24 @@ describe('turn arrows', () => {
       stems++;
     }
     expect(stems).toBeGreaterThanOrEqual(props.arrowLanes);
+  });
+
+  it('are left off lanes that may go every way, and appear once a lane is limited', () => {
+    const net = zoned();
+    addRoad(net, free(-35, -40), free(-35, 40), STREET);
+    const crossing = [...net.nodes.values()].find((n) => Math.abs(n.pos[0] + 35) < 0.01 && Math.abs(n.pos[2]) < 0.01)!;
+    const north = net.arms(crossing.id).find((a) => a.dir[2] > 0.9)!.segment;
+    const graph = () => new TrafficSim(new LaneGraph(net), [], 1);
+    // The single-lane street approach may go left, straight and right: no arrow on it.
+    const onNorth = (sim: TrafficSim) => sim.graph.lanes.filter((l) => l.kind === 'road' && l.segment === north.id
+      && sim.graph.lanes[l.next[0] ?? -1]?.node === crossing.id);
+    let sim = graph();
+    expect(onNorth(sim).length).toBe(1);
+    expect(sim.graph.armTurns.get(onNorth(sim)[0]!.id)).toBe(TURN_LEFT | TURN_STRAIGHT | TURN_RIGHT);
+    const before = new JunctionProps(sim).arrowLanes;
+    expect(before).toBeGreaterThan(0); // the multi-lane arterial lanes keep theirs
+    setTurns(net, north.id, crossing.id, 0, TURN_LEFT); // left only
+    sim = graph();
+    expect(new JunctionProps(sim).arrowLanes).toBe(before + 1);
   });
 });

@@ -43,6 +43,11 @@ export class LaneGraph {
   /** Dead-end nodes where vehicles enter (outgoing lanes) / leave (incoming lanes) the scene. */
   readonly sources = new Map<number, number[]>();
   readonly sinks = new Map<number, number[]>();
+  /**
+   * For each road lane arriving at a junction: every turn the road layout offers from its arm
+   * (TURN_* bits), whether or not this lane is allowed to take it.
+   */
+  readonly armTurns = new Map<number, number>();
 
   constructor(readonly net: RoadNetwork) {
     const incoming = new Map<number, Map<number, Lane[]>>(); // node → segment → lanes ending there
@@ -105,6 +110,9 @@ export class LaneGraph {
       for (const [inSeg, inLanes] of ins) {
         const exits = [...outs].filter(([seg]) => seg !== inSeg); // no U-turns
         const hasStraight = exits.some(([, ls]) => this.classify(inLanes[0]!, ls[0]!) === 'straight');
+        let possible = 0;
+        for (const [, ls] of exits) possible |= TURN_BIT[this.classify(inLanes[0]!, ls[0]!)];
+        for (const l of inLanes) this.armTurns.set(l.id, possible);
         for (const [, outLanes] of exits) this.connect(node.id, inLanes, outLanes, junction, twoWay, hasStraight);
         // Guarantee every incoming lane can continue somewhere.
         for (const l of inLanes) {

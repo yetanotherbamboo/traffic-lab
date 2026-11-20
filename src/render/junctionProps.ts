@@ -2,6 +2,7 @@ import type { Vec3 } from '../core/math';
 import { KIND_EMISSIVE, KIND_PLAIN, LIT_STRIDE } from '../env/city';
 import { rightOf } from '../network/network';
 import { SIGNAL_GREEN, SIGNAL_RED, type SignalController } from '../sim/junctions';
+import { TURN_BIT } from '../sim/laneGraph';
 import type { TrafficSim } from '../sim/traffic';
 import { GLOW_STRIDE } from './lights';
 
@@ -75,15 +76,20 @@ export class JunctionProps {
             }
           }
         }
-        // Turn arrows painted on every approach lane of a real junction (3+ roads), following the
-        // lane's own path so they stay in the lane on curved approaches. Short approaches (close
+        // Turn arrows on approach lanes of a real junction (3+ roads), but only where the lane is
+        // limited to some directions: no arrow means every way the junction offers. They follow
+        // the lane's path so they stay in the lane on curved approaches; short approaches (close
         // junctions) get the arrow nearer the stop line.
         if (graph.net.node(nodeId).segments.length >= 3) {
           for (const id of laneIds) {
             const l = graph.lanes[id]!;
             if (l.path.length < ARROW_MIN_LANE) continue;
-            this.arrowLanes++;
             const turns = new Set(l.next.map((n) => graph.lanes[n]!.turn ?? 'straight'));
+            // No arrow means "any direction": skip lanes that may take every turn the arm offers.
+            let mask = 0;
+            for (const t of turns) mask |= TURN_BIT[t];
+            if (mask === graph.armTurns.get(id)) continue;
+            this.arrowLanes++;
             const D = Math.min(ARROW_BACK, l.path.length - 0.3);
             // Point `f` metres along the arrow (from its base) and `u` metres right of the lane centre.
             const at = (f: number, u: number): Vec3 => {

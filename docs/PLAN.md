@@ -200,6 +200,7 @@ _Last updated: 2026-11-20_
     - **Glow:** soft premultiplied glow sprites with a minimum on-screen size, so signals stay readable when zoomed out and blinkers show at mid zoom. This adds 2 draw calls (lights, glows).
   - **Van model (2026-11-20):** vans (`TrafficSim.van`, about 10% of vehicles) have their own low-poly model: a tall cargo box behind a raked windscreen with a short bonnet, glazed only at the cab (shader kind 4). This adds 1 draw call.
   - **Turn arrows fix (2026-11-20):** arrows follow the lane's path (they used to run straight back from the stop line and drift off curved approaches). Short approaches between close junctions get the arrow nearer the stop line (it used to be skipped below 14 m; now only below 5.5 m). Flat road paint no longer gets the near-ground darkening, so arrows and stop lines stay crisp when zoomed out.
+  - **No arrow = any direction (2026-11-20):** lanes that may take every turn their arm offers (`LaneGraph.armTurns`) get no arrow, e.g. single-lane streets. Arrows appear only on lanes limited to some directions, by default or by the turn-lane editor.
 
 ### Next
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**

@@ -1,7 +1,7 @@
 import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import type { LaneProfile, RoadNetwork } from '../network/network';
-import { type EditResult, EditError, addRoad, bendRoad, deleteRoad, touchedAround } from './ops';
+import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, touchedAround } from './ops';
 import { type Pick, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
@@ -36,7 +36,8 @@ export interface EditorHost {
 
 export interface Marker {
   pos: Vec3;
-  kind: 'node' | 'segment' | 'free' | 'handle';
+  /** 'blocked': a road can't start here (drawn as a red cross). */
+  kind: 'node' | 'segment' | 'free' | 'handle' | 'blocked';
 }
 
 /** An edit in progress (while a finger is down), shown as a preview. */
@@ -107,6 +108,17 @@ export class Editor {
     this.message = null;
     if (this.tool === 'road') {
       const snap = snapPoint(this.net, this.host.zone, p, tol);
+      const problem = this.startProblem(snap.anchor);
+      if (problem) {
+        // Nothing gets built from here: keep the red cross under the finger until it lifts.
+        this.start = null;
+        this.draft = {
+          candidate: null, changed: [], touched: [], markers: [{ pos: snap.anchor.pos, kind: 'blocked' }],
+          error: problem, cost: 0, demolish: [], demolishCost: 0,
+        };
+        this.changed();
+        return true;
+      }
       this.start = snap.anchor;
       this.draft = {
         candidate: null, changed: [], touched: [], markers: [{ pos: snap.anchor.pos, kind: snap.anchor.kind }],
@@ -174,8 +186,23 @@ export class Editor {
       return;
     }
     const a = snapPoint(this.net, this.host.zone, p, tol).anchor;
-    this.hover = { pos: a.pos, kind: a.kind };
+    this.hover = { pos: a.pos, kind: this.startProblem(a) ? 'blocked' : a.kind };
     this.changed();
+  }
+
+  private problemCache = { net: null as RoadNetwork | null, key: '', result: null as string | null };
+
+  /** Why a road can't start at this anchor (cached: hover asks on every mouse move). */
+  private startProblem(a: Anchor): string | null {
+    if (a.kind !== 'segment' && a.kind !== 'node') return null;
+    const c = this.problemCache, net = this.net;
+    const key = `${a.kind}:${a.id}:${a.kind === 'segment' ? a.t.toFixed(3) : ''}:${this.preset}`;
+    if (c.net !== net || c.key !== key) {
+      c.net = net;
+      c.key = key;
+      c.result = anchorProblem(net, a, ROAD_PRESETS[this.preset]!.profile);
+    }
+    return c.result;
   }
 
   /** Tap with a tap tool: select or delete. */

@@ -7,8 +7,19 @@ import type { OverlayBuilder } from '../render/overlay';
 import { APPROACH_HEX, BACKWARD_HEX, FORWARD_HEX, OVERLAY, hexToVec } from './colors';
 
 const MARKER_COLOR: Record<Marker['kind'], Vec3> = {
-  node: OVERLAY.node, segment: OVERLAY.segment, free: OVERLAY.free, handle: OVERLAY.segment,
+  node: OVERLAY.node, segment: OVERLAY.segment, free: OVERLAY.free, handle: OVERLAY.segment, blocked: OVERLAY.error,
 };
+
+/** A snap marker: a ring, or a red cross where no road can start. */
+function marker(ob: OverlayBuilder, m: Marker, color: Vec3): void {
+  if (m.kind !== 'blocked') {
+    ob.ring(m.pos, m.kind === 'handle' ? 1.6 : 2.4, color);
+    return;
+  }
+  const r = 2.0, [x, , z] = m.pos;
+  ob.strip([x - r, 0, z - r], [x + r, 0, z + r], 0.7, color);
+  ob.strip([x - r, 0, z + r], [x + r, 0, z - r], 0.7, color);
+}
 const APPROACH = APPROACH_HEX.map(hexToVec);
 const FORWARD = hexToVec(FORWARD_HEX), BACKWARD = hexToVec(BACKWARD_HEX);
 
@@ -25,14 +36,14 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
         if (seg) ob.curve(seg.curve, color, 1.0);
       }
     }
-    for (const m of d.markers) ob.ring(m.pos, m.kind === 'handle' ? 1.6 : 2.4, d.error && m.kind === 'free' ? color : MARKER_COLOR[m.kind]);
+    for (const m of d.markers) marker(ob, m, d.error && m.kind === 'free' ? color : MARKER_COLOR[m.kind]);
     for (const id of d.demolish) {
       const it = w.city.items[id]!;
       if (it.lot) ob.lot(it.lot, OVERLAY.demolish);
       else ob.ring([it.x, 0, it.z], it.r, OVERLAY.demolish, 0.35);
     }
   }
-  if (ed.hover) ob.ring(ed.hover.pos, 2.4, MARKER_COLOR[ed.hover.kind]);
+  if (ed.hover) marker(ob, ed.hover, MARKER_COLOR[ed.hover.kind]);
 
   // Bend tool: grab handles in the middle of every editable road.
   if (ed.tool === 'bend' && !d) {

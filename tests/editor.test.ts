@@ -3,7 +3,7 @@ import type { Vec3 } from '../src/core/math';
 import { itemsHitByRoads } from '../src/env/city';
 import { zoneDistance } from '../src/env/zone';
 import { Editor, ROAD_PRESETS } from '../src/editor/editor';
-import { addRoad, bendRoad, deleteRoad, setLanes, setTurns } from '../src/editor/ops';
+import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, setLanes, setTurns } from '../src/editor/ops';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
 import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
@@ -371,5 +371,47 @@ describe('turn arrows', () => {
     setTurns(net, north.id, crossing.id, 0, TURN_LEFT); // left only
     sim = graph();
     expect(new JunctionProps(sim).arrowLanes).toBe(before + 1);
+  });
+});
+
+describe('starting a road near a junction', () => {
+  it('shows a red cross exactly where no road can start, and refuses to start there', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.preset = 1; // avenue: wide junctions
+    const kinds: string[] = [];
+    for (let x = 1; x <= 69; x += 0.5) {
+      ed.hoverAt([x, 0, 0], 1.5);
+      const kind = ed.hover!.kind;
+      kinds.push(kind);
+      const before = w.net.segments.size;
+      ed.down([x, 0, 0], 1.5);
+      ed.move([x, 0, 20], 1.5);
+      ed.move([x, 0, 30], 1.5);
+      const err = ed.draft?.error ?? null;
+      if (kind === 'blocked') {
+        expect(ed.draft?.candidate ?? null, `x=${x}: nothing is previewed`).toBeNull();
+        ed.up();
+        expect(ed.message).toBe(TOO_CLOSE);
+        expect(w.net.segments.size).toBe(before);
+      } else {
+        // Wherever a road may start, a junction there never makes a piece of the old road too short.
+        expect(err, `x=${x}`).not.toBe('Too short: junctions are too close together');
+        ed.cancel();
+      }
+    }
+    // Along the avenue east of the centre: the junction itself, a red band, then free road.
+    const first = kinds.indexOf('blocked'), firstOk = kinds.indexOf('segment');
+    expect(kinds[0]).toBe('node');
+    expect(first).toBeGreaterThan(0);
+    expect(firstOk).toBeGreaterThan(first);
+    // A narrow street needs less room than an avenue.
+    ed.preset = 0;
+    const streetKinds = kinds.map((_, k) => {
+      ed.hoverAt([1 + k * 0.5, 0, 0], 1.5);
+      return ed.hover!.kind;
+    });
+    expect(streetKinds.indexOf('segment')).toBeLessThanOrEqual(firstOk);
   });
 });

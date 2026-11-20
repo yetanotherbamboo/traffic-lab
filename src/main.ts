@@ -122,6 +122,9 @@ function syncScene(): void {
     seenEditor = ev;
     buildEditorOverlay(overlay, editor, world);
     renderer.setOverlay(overlay.buffer, overlay.count);
+    // Desktop: the mouse pointer says when a road can't start under it.
+    const cursor = editor.hover?.kind === 'blocked' ? 'not-allowed' : '';
+    if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   }
   ui.update();
 }

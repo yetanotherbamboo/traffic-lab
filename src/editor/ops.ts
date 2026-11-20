@@ -1,9 +1,10 @@
 import { type Vec3, vec3 } from '../core/math';
-import type { JunctionControl, LaneProfile, RoadNetwork } from '../network/network';
+import { type JunctionControl, type LaneProfile, type RoadNetwork, horizontal, rightOf } from '../network/network';
 import { roadCost } from './cost';
 import { nearestOnSegment } from './pick';
 import { sampleCurve } from './rules';
 import type { Anchor } from './snap';
+import { MAX_ARMS, MIN_ROAD } from './validate';
 
 /**
  * Editing operations on a road network. Each mutates the network it is given (the editor runs
@@ -96,6 +97,34 @@ function splitCrossings(net: RoadNetwork, ids: number[]): number[] {
     pending.push(y.first, y.second);
   }
   return [...done, ...pending];
+}
+
+/** Shown when a new road can't start (or end) at a point; see `anchorProblem`. */
+export const TOO_CLOSE = 'Too close to a junction: start the road further away from it';
+
+/**
+ * Can a new road of `profile` attach at this anchor at all, whatever direction it is drawn in?
+ * On a road, a new junction there is tried with a perpendicular road (the angle that needs the
+ * least room): if even that leaves a piece of the old road shorter than MIN_ROAD between the
+ * junction areas, no road can join here. Returns the reason, or null.
+ */
+export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile): string | null {
+  if (a.kind === 'node') {
+    return net.node(a.id).segments.length >= MAX_ARMS ? `At most ${MAX_ARMS} roads can meet at a junction` : null;
+  }
+  if (a.kind !== 'segment' || !net.segments.has(a.id)) return null;
+  // Roundabout rings are rebuilt evenly around a new entry, so a plain split says nothing there.
+  if (net.segment(a.id).ring !== undefined) return null;
+  const trial = net.clone();
+  const r = rightOf(horizontal(trial.segment(a.id).curve.derivative(a.t)));
+  const { node, first, second } = trial.splitSegment(a.id, a.t);
+  const p = trial.node(node).pos;
+  trial.addSegment(node, trial.addNode([p[0] + r[0] * 30, 0, p[2] + r[2] * 30]), profile);
+  for (const id of [first, second]) {
+    const [s0, s1] = trial.trimmedRange(trial.segment(id));
+    if (s1 - s0 < MIN_ROAD) return TOO_CLOSE;
+  }
+  return null;
 }
 
 /** Builds a straight road between two anchors, adding junctions where it crosses other roads. */

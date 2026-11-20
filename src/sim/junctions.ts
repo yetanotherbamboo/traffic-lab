@@ -288,7 +288,10 @@ export class JunctionModel {
       const ab = firstConflict(a.path, b.path);
       if (!ab) return;
       sa = ab.sa; sb = ab.sb;
-      const h = Math.min(6, 1.2 / Math.max(ab.angle, 0.25) + 1);
+      // Zone half-length along each path: enough for two ~2 m wide cars crossing at this angle
+      // ((1 + |cos|) / sin for their half-widths), plus a margin.
+      const sin = Math.max(ab.angle, 0.25), cos = Math.sqrt(Math.max(0, 1 - sin * sin));
+      const h = Math.min(6, Math.max(1.2 / sin + 1, (1 + cos) / sin + 0.8));
       ha = hb = h;
     }
     this.conflicts[a.id]!.push({ other: b.id, sSelf: sa, sOther: sb, h: ha, hOther: hb, yields: this.yields(nodeId, a, b) });

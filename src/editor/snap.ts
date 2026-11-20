@@ -18,8 +18,8 @@ export interface Snap {
 
 const ANGLE_STEP = Math.PI / 12; // 15°
 const ANGLE_SNAP = (5 * Math.PI) / 180;
-/** Roads joining an existing road closer than this to its end snap to the end node instead. */
-const END_SNAP = 8;
+/** Roads joining an existing road closer than this to its junction edge snap to the junction. */
+const END_SNAP = 3;
 
 /** Directions (angles) of the roads at a node, measured away from it. */
 function armAngles(net: RoadNetwork, nodeId: number): number[] {
@@ -40,7 +40,7 @@ export function snapPoint(net: RoadNetwork, zone: Zone, p: Vec3, tol: number, fr
   if (pick?.kind === 'segment') {
     const seg = net.segment(pick.id);
     const s = seg.curve.length * pick.t; // close enough for an end-distance check
-    const nearA = s < END_SNAP + net.junctionRadius(seg.a), nearB = seg.curve.length - s < END_SNAP + net.junctionRadius(seg.b);
+    const nearA = s < END_SNAP + net.armTrim(seg.a, seg.id), nearB = seg.curve.length - s < END_SNAP + net.armTrim(seg.b, seg.id);
     if (nearA || nearB) {
       const id = nearA && (!nearB || s < seg.curve.length / 2) ? seg.a : seg.b;
       if (nodeConnectable(net, zone, id)) return { anchor: { kind: 'node', id, pos: net.node(id).pos }, aligned: false };

@@ -191,6 +191,40 @@ describe('lane changes', () => {
     expect(ahead || sim.stats.exited > 0).toBe(true);
     expect(overlaps(sim)).toBe(0);
   });
+
+  for (const [label, slowF, fastF] of [['at speed', 0.35, 1.05], ['when crawling', 0.08, 0.22]] as const) {
+    it(`steers through the change instead of sliding sideways (${label})`, () => {
+      // The road runs along +x, so z is sideways.
+      const { sim, a, b } = straightRoad(2);
+      sim.spawn(a, b, { speedFactor: slowF });
+      const prev = new Float32Array(sim.capacity * 4);
+      let changing = 0;
+      for (let t = 0; t < 1500; t++) {
+        if (t % 60 === 30) sim.spawn(a, b, { speedFactor: fastF });
+        prev.set(sim.pose);
+        sim.step(DT);
+        for (let i = 0; i < sim.capacity; i++) {
+          if (!sim.alive[i] || sim.prevPose[i * 4] !== prev[i * 4]) continue;
+          const dx = sim.pose[i * 4]! - prev[i * 4]!, dz = sim.pose[i * 4 + 2]! - prev[i * 4 + 2]!;
+          if (sim.lcW[i] !== 0) changing++;
+          // Sideways movement only together with forward movement (no crab walk), max ~30°.
+          expect(Math.abs(dz)).toBeLessThanOrEqual(Math.abs(dx) * 0.6 + 1e-3);
+          // The body turns smoothly.
+          let dh = Math.abs(sim.pose[i * 4 + 3]! - prev[i * 4 + 3]!);
+          if (dh > Math.PI) dh = 2 * Math.PI - dh;
+          expect(dh).toBeLessThan(0.12);
+          // ...and points roughly where the front is going.
+          if (dx > 0.05) {
+            let err = Math.abs(Math.atan2(-dz, dx) - sim.pose[i * 4 + 3]!);
+            if (err > Math.PI) err = 2 * Math.PI - err;
+            expect(err).toBeLessThan(0.2);
+          }
+        }
+      }
+      expect(changing).toBeGreaterThan(10);
+      expect(overlaps(sim)).toBe(0);
+    });
+  }
 });
 
 describe('signals', () => {

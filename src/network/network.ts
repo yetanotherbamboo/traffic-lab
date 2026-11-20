@@ -74,6 +74,8 @@ export interface Arm {
 
 /** Extra length beyond the point where neighbouring sidewalk edges meet, for a rounded kerb. */
 const KERB_ROOM = 3;
+/** Minimum distance from a junction centre to where a road begins. */
+const MIN_TRIM = 5;
 
 export const horizontal = (v: Vec3): Vec3 => vec3.normalize([v[0], 0, v[2]]);
 export const rightOf = (d: Vec3): Vec3 => [-d[2], 0, d[0]];
@@ -245,21 +247,33 @@ export class RoadNetwork {
       || p0.laneWidth !== p1.laneWidth || p0.sidewalk !== p1.sidewalk;
   }
 
-  /** Base junction size: sized for roughly perpendicular crossings of the widest road. */
+  /**
+   * Smallest junction size. Where 2 roads continue straight (a lane-count change) the taper
+   * needs room to merge; elsewhere the clearance between neighbouring roads decides (`armTrim`).
+   */
   private baseRadius(nodeId: number): number {
-    let half = 0, walk = 0;
-    for (const sid of this.node(nodeId).segments) {
-      const p = this.segments.get(sid)!.profile;
-      half = Math.max(half, Math.max(p.forward, p.backward) * p.laneWidth);
-      walk = Math.max(walk, p.sidewalk);
+    const segs = this.node(nodeId).segments;
+    if (segs.length === 2) {
+      const d0 = this.leaveDir(this.segments.get(segs[0]!)!, nodeId);
+      const d1 = this.leaveDir(this.segments.get(segs[1]!)!, nodeId);
+      if (vec3.dot(d0, d1) < -0.985) {
+        let half = 0, walk = 0;
+        for (const sid of segs) {
+          const p = this.segments.get(sid)!.profile;
+          half = Math.max(half, Math.max(p.forward, p.backward) * p.laneWidth);
+          walk = Math.max(walk, p.sidewalk);
+        }
+        return half + walk + 3;
+      }
     }
-    return half + walk + 3;
+    return MIN_TRIM;
   }
 
   /**
-   * Distance from the node centre at which road `segId` stops and the junction surface begins.
-   * At least the base size; at acute angles a road is pulled back until its outer sidewalk edge
-   * clears the neighbouring roads' edges (plus room for a rounded kerb), so sidewalks never overlap.
+   * Distance from the node centre at which road `segId` stops and the junction surface begins:
+   * where its outer sidewalk edge clears the edges of the neighbouring roads, plus room for a
+   * rounded kerb. A narrow street joining an avenue therefore pulls the avenue back only a little,
+   * and at acute angles roads are pulled back far enough that sidewalks never overlap.
    */
   armTrim(nodeId: number, segId: number): number {
     if (!this.isJunction(nodeId)) return 0;

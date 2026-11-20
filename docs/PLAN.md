@@ -188,12 +188,16 @@ _Last updated: 2026-11-20_
     - `src/ui/` holds the HTML toolbar, panels and overlay content. `src/render/overlay.ts` adds 1 draw call.
   - **Checks:** a headless browser run showed drawing, junction panel, signals, turn lanes, bend, remove and undo working. Traffic after a crossing street, a lane drop and a road removal kept flowing, with no new overlaps.
   - **Status:** awaiting phone check.
+  - **Follow-ups (2026-11-20):**
+    - **Junction spacing:** junctions can be built much closer (see Junction sizing).
+    - **Lane changes:** the sideways offset follows an S-curve over distance travelled (12–45 m, longer at speed), and the heading comes from front and rear points on that curve. Cars steer through a change at any speed instead of sliding sideways.
+    - **Lane-change safety:** a change must fit before the end of the lane. A changer keeps clear of traffic ahead in its old lane until its rear is across. Cars still leaving a lane count as occupying it, so two cars can't swap lanes through each other.
 
 ### Next
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**
 
 ### Known issues / tech debt
-- **Junction sizing:** each road end is trimmed separately (`RoadNetwork.armTrim`): at least the base size for perpendicular crossings, and at acute angles far enough that neighbouring sidewalk edges don't overlap. Corners are circular fillets. The edge test uses the road direction at the node, so strongly curved roads right at a junction could still clip.
+- **Junction sizing:** each road end is trimmed separately (`RoadNetwork.armTrim`), only as far as its neighbours' sidewalk edges require plus 3 m for a rounded kerb (minimum 5 m; straight lane-count tapers keep the long taper). A street crossing an avenue pulls the avenue back only about 9 m, so junctions can be about 24 m apart. Corners are circular fillets. The edge test uses the road direction at the node, so strongly curved roads right at a junction could still clip.
 - **Dead ends:** roads have no end caps. Vehicles that end up on a player-made dead end (only via a forced fallback move) are removed there; there are no U-turns.
 - **Junction markings:** there are no stop lines or crosswalks yet.
 - **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.
@@ -202,6 +206,7 @@ _Last updated: 2026-11-20_
 - **Widening roads demolishes frontage:** adding lanes pushes sidewalks into lots, which are demolished (and paid for) immediately. The lanes panel has no cost preview.
 - **Lane-mapping on edits:** vehicles inside a junction whose connector no longer exists are removed rather than re-routed.
 - **Preview cost on phones:** each drag move clones the network, validates and rebuilds the road mesh, about 3 ms on a laptop. Watch for lag on the phone.
+- **Junction overlaps:** rare brief overlaps remain inside junctions. Conflict zones are placed where paths first come within 1.9 m, not at the true crossing, so a car stopped at a zone edge can be grazed (about 2 samples per 2 simulated hours in the city). Conflict zones are now sized by crossing angle, and when two cars are both inside one zone, the one less far across stops.
 - **Deadlock breaker:** when it fires, a stuck vehicle creeps through, which can cause a brief visual overlap. This is rare at nominal demand and more frequent when the network is oversaturated (1.5× demand: a few samples per 20 minutes).
 - **Signal timings:** green time defaults to 10 s + 8 s per lane and can be changed per phase in the editor. No actuation or protected left phases yet.
 - **Free-flow routing:** routes use free-flow time only, so vehicles don't avoid congestion. Dynamic rerouting is a candidate for Milestone 7/8.

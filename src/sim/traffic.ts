@@ -13,7 +13,12 @@ const GAP_RANGE = 35; // ...and to gaps in priority traffic this far
 const STOP_BEFORE_LINE = 1; // metres
 const LC_INTERVAL = 5; // steps between lane-change evaluations per vehicle (staggered)
 const LC_COOLDOWN = 4; // s
-const LAT_SPEED = 1.3; // m/s, visual sideways speed during a lane change
+/** Lane-change manoeuvre length (m of travel): longer at speed, a short S-curve when crawling. */
+const LC_MIN_LEN = 12;
+const LC_MAX_LEN = 45;
+const LC_LEN_PER_MS = 2.6; // extra metres per m/s of speed
+/** The heading is taken from a point this far back along the car (fraction of its length). */
+const REAR_FRAC = 0.7;
 const GHOST_LAT = 1.2; // m: while further than this from its new lane, a changer still blocks the old one
 const MOBIL = { politeness: 0.25, threshold: 0.2, bSafe: 4 };
 const DEADLOCK_TIME = 6; // s stopped inside a junction before the deadlock breaker kicks in
@@ -35,6 +40,13 @@ export interface SimStats {
   laneChanges: number;
   /** Vehicles that ended up in a lane that could not reach their destination (missed turn). */
   reroutes: number;
+}
+
+/** Lane-change S-curve: 1 at the start (still on the old lane's line), 0 at the end. */
+function lcProfile(u: number): number {
+  if (u <= 0) return 1;
+  if (u >= 1) return 0;
+  return 0.5 * (1 + Math.cos(Math.PI * u));
 }
 
 /** Time to cover `dist` from speed v, accelerating at `a` up to `vmax`. */
@@ -75,8 +87,16 @@ export class TrafficSim {
   readonly waiting: Uint8Array;
   readonly stopTime: Float32Array;
   readonly lcCooldown: Float32Array;
-  /** Visual lateral offset (m, + = right) left over from a lane change; decays to 0. */
+  /** Visual lateral offset (m, + = right) of the front, left over from a lane change; goes to 0. */
   readonly lat: Float32Array;
+  /**
+   * Lane change in progress: the offset at the start (0 = none), metres travelled since, and the
+   * manoeuvre length. The offset follows an S-curve over distance, so the car steers through
+   * the change at any speed instead of sliding sideways.
+   */
+  readonly lcW: Float32Array;
+  readonly lcDist: Float32Array;
+  readonly lcLen: Float32Array;
   /** When the vehicle entered its current junction (Infinity while on a road lane). */
   readonly enterTime: Float32Array;
   /** Seconds stopped inside a junction, and whether the deadlock breaker is active for the vehicle. */
@@ -123,6 +143,9 @@ export class TrafficSim {
     this.stopTime = f32();
     this.lcCooldown = f32();
     this.lat = f32();
+    this.lcW = f32();
+    this.lcDist = f32();
+    this.lcLen = f32();
     this.fromLane = new Int32Array(capacity).fill(-1);
     this.lastLane = new Int32Array(capacity).fill(-1);
     this.enterTime = new Float32Array(capacity).fill(Infinity);
@@ -205,6 +228,7 @@ export class TrafficSim {
     this.stopTime[i] = -1;
     this.lcCooldown[i] = LC_COOLDOWN;
     this.lat[i] = 0;
+    this.lcW[i] = 0;
     this.fromLane[i] = -1;
     this.lastLane[i] = -1;
     this.enterTime[i] = Infinity;
@@ -234,7 +258,7 @@ export class TrafficSim {
       if (!this.alive[i]) continue;
       this.laneVehicles[this.lane[i]!]!.push(i);
       if (this.fromLane[i]! >= 0) {
-        if (Math.abs(this.lat[i]!) > GHOST_LAT) this.laneGhosts[this.fromLane[i]!]!.push(i);
+        if (Math.max(Math.abs(this.lat[i]!), Math.abs(this.rearLat(i))) > GHOST_LAT) this.laneGhosts[this.fromLane[i]!]!.push(i);
         else this.fromLane[i] = -1;
       }
     }
@@ -363,6 +387,22 @@ export class TrafficSim {
       if (toZone <= 0) return true; // inside the zone
       const vj = this.v[j]!;
       if (earlier && vj >= 1 && toZone < vj * 2) return true; // about to enter
+    }
+    return false;
+  }
+
+  /**
+   * Both vehicle i (front `depth` m into zone `c`) and another vehicle are inside the same conflict
+   * zone: true if the other one is further across (ties by slot), so i should stop. Exactly one of
+   * two vehicles gets true, so they can never both drive on into each other.
+   */
+  private behindInZone(i: number, depth: number, c: Conflict): boolean {
+    for (const j of this.laneVehicles[c.other]!) {
+      const front = this.s[j]!;
+      if (front - this.length[j]! > c.sOther + c.hOther) continue; // through
+      const theirs = front - (c.sOther - c.hOther);
+      if (theirs <= 0) continue; // not in the zone yet
+      if (theirs > depth || (theirs === depth && j < i)) return true;
     }
     return false;
   }
@@ -524,7 +564,15 @@ export class TrafficSim {
     const signal = this.junctions.control.get(C.node) === 'signal';
     for (const c of this.junctions.conflicts[C.id]!) {
       const entry = c.sSelf - c.h - pos;
-      if (entry <= 0 || entry > 40) continue;
+      if (entry <= 0) {
+        // Already in the zone: if the other vehicle is in it too and further across, stop and let it clear.
+        if (pos < c.sSelf + c.h && this.behindInZone(i, -entry, c)) {
+          limit = Math.min(limit, this.stopAccel(i, 0));
+          this.waiting[i] = 1;
+        }
+        continue;
+      }
+      if (entry > 40) continue;
       let hold = this.zoneOccupied(i, c);
       // Waiting mid-junction is only safe at signals (crossing traffic has red); elsewhere drivers commit.
       if (!hold && signal && c.yields && pos >= 0 && entry > brake + 0.5) hold = !this.gapOk(i, C, d, c);
@@ -551,13 +599,16 @@ export class TrafficSim {
   private laneChanges(): void {
     const lanes = this.graph.lanes;
     for (let i = 0; i < this.capacity; i++) {
-      if (!this.alive[i] || (i + this.steps) % LC_INTERVAL !== 0 || this.lcCooldown[i]! > 0) continue;
+      if (!this.alive[i] || (i + this.steps) % LC_INTERVAL !== 0 || this.lcCooldown[i]! > 0 || this.lcW[i] !== 0) continue;
       const L = lanes[this.lane[i]!]!;
       if (L.kind !== 'road') continue;
       const group = this.graph.groups[L.group]!;
       const s = this.s[i]!;
       const distToEnd = L.path.length - s;
-      if (group.length < 2 || s < 3 || distToEnd < 8 || this.waiting[i]) continue;
+      // The whole manoeuvre (front and rear) must fit before the end of the lane.
+      const back = this.length[i]! * REAR_FRAC;
+      const lcLen = Math.min(LC_MAX_LEN, 8 + LC_LEN_PER_MS * this.v[i]!, distToEnd - back - 2);
+      if (group.length < 2 || s < 3 || lcLen < LC_MIN_LEN || this.waiting[i]) continue;
 
       const table = this.table(this.dest[i]!);
       const costCur = table.cost[L.id]!;
@@ -589,6 +640,12 @@ export class TrafficSim {
             if (nf < 0) nf = j;
           }
         }
+        // Vehicles still moving out of the target lane occupy it too (no swapping lanes through each other).
+        for (const j of this.laneGhosts[K.id]!) {
+          const Lj = lanes[this.lane[j]!]!;
+          const sj = (this.s[j]! * K.path.length) / Lj.path.length;
+          if (sj + 2 > sK - this.length[i]! - 2 && sj - this.length[j]! - 2 < sK + 2) unsafe = true;
+        }
         if (unsafe) continue;
         const aMeNew = this.followAccel(i, K.id, sK);
         let aNF = 0, aNFnew = 0;
@@ -605,7 +662,10 @@ export class TrafficSim {
       }
       if (best >= 0) {
         const K = lanes[best]!;
-        this.lat[i] = this.lat[i]! + (K.index < L.index ? 1 : -1) * L.width;
+        this.lat[i] = (K.index < L.index ? 1 : -1) * L.width;
+        this.lcW[i] = this.lat[i]!;
+        this.lcDist[i] = 0;
+        this.lcLen[i] = Math.max(LC_MIN_LEN, lcLen);
         this.fromLane[i] = L.id;
         this.lastLane[i] = -1;
         this.lane[i] = best;
@@ -621,7 +681,15 @@ export class TrafficSim {
   private computeAccelerations(): void {
     for (let i = 0; i < this.capacity; i++) {
       if (!this.alive[i]) continue;
-      this.acc[i] = Math.min(this.followAccel(i, this.lane[i]!, this.s[i]!), this.junctionLimit(i));
+      let a = Math.min(this.followAccel(i, this.lane[i]!, this.s[i]!), this.junctionLimit(i));
+      // Mid lane change: still partly in the old lane, so keep clear of its traffic ahead too.
+      const from = this.fromLane[i]!;
+      if (from >= 0) {
+        const lanes = this.graph.lanes;
+        const sFrom = (this.s[i]! * lanes[from]!.path.length) / lanes[this.lane[i]!]!.path.length;
+        a = Math.min(a, this.followAccel(i, from, sFrom));
+      }
+      this.acc[i] = a;
     }
   }
 
@@ -653,10 +721,15 @@ export class TrafficSim {
       }
       this.v[i] = v1;
       if (this.lcCooldown[i]! > 0) this.lcCooldown[i] = this.lcCooldown[i]! - dt;
-      const lat = this.lat[i]!;
-      if (lat !== 0) {
-        const step = this.latSpeed(i) * dt;
-        this.lat[i] = Math.abs(lat) <= step ? 0 : lat - Math.sign(lat) * step;
+      if (this.lcW[i] !== 0) {
+        const d = this.lcDist[i]! + ds;
+        this.lcDist[i] = d;
+        this.lat[i] = this.lcW[i]! * lcProfile(d / this.lcLen[i]!);
+        // Done once the rear has followed the front through the whole S-curve.
+        if (d >= this.lcLen[i]! + this.length[i]! * REAR_FRAC) {
+          this.lcW[i] = 0;
+          this.lat[i] = 0;
+        }
       }
 
       let s = this.s[i]! + ds;
@@ -732,20 +805,19 @@ export class TrafficSim {
     }
   }
 
-  /** Sideways speed of the visual lane-change manoeuvre: slower when crawling in a queue. */
-  private latSpeed(i: number): number {
-    return Math.min(LAT_SPEED, 0.6 + 0.25 * this.v[i]!);
-  }
-
-  /** Pose = point on the lane, shifted sideways by the lane-change offset and yawed into the manoeuvre. */
+  /**
+   * Pose = front bumper on the lane, shifted sideways by the lane-change offset. The heading
+   * points from a trailing rear point (on the path behind, with the offset the front had when it
+   * was there) to the front, like a real car whose rear follows the path of its front wheels.
+   */
   private writePose(i: number): void {
     const o = i * POSE_STRIDE;
     const lanes = this.graph.lanes;
     const lane = lanes[this.lane[i]!]!;
     const s = this.s[i]!;
-    lane.path.sample(s, this.pose, o);
-    // Heading from a trailing rear point, like a real car whose rear follows the path behind it.
-    const back = this.length[i]! * 0.7;
+    const pose = this.pose;
+    lane.path.sample(s, pose, o);
+    const back = this.length[i]! * REAR_FRAC;
     const r = this.rearScratch;
     const last = this.lastLane[i]!;
     if (s >= back || last < 0) {
@@ -755,15 +827,25 @@ export class TrafficSim {
       const prev = lanes[last]!;
       prev.path.sample(prev.path.length - (back - s), r, 0);
     }
-    const dx = this.pose[o]! - r[0]!, dz = this.pose[o + 2]! - r[2]!;
-    if (dx * dx + dz * dz > 0.01) this.pose[o + 3] = Math.atan2(-dz, dx);
-    const lat = this.lat[i]!;
-    if (lat !== 0) {
-      const h = this.pose[o + 3]!;
-      this.pose[o] = this.pose[o]! + Math.sin(h) * lat;
-      this.pose[o + 2] = this.pose[o + 2]! + Math.cos(h) * lat;
-      this.pose[o + 3] = h + Math.atan2(Math.sign(lat) * this.latSpeed(i), Math.max(this.v[i]!, 8));
+    const W = this.lcW[i]!;
+    if (W !== 0) {
+      const latF = this.lat[i]!;
+      const latR = this.rearLat(i);
+      // Offsets to the right of the path's own heading at each point: (sin h, cos h).
+      const hf = pose[o + 3]!, hr = r[3]!;
+      pose[o] = pose[o]! + Math.sin(hf) * latF;
+      pose[o + 2] = pose[o + 2]! + Math.cos(hf) * latF;
+      r[0] = r[0]! + Math.sin(hr) * latR;
+      r[2] = r[2]! + Math.cos(hr) * latR;
     }
+    const dx = pose[o]! - r[0]!, dz = pose[o + 2]! - r[2]!;
+    if (dx * dx + dz * dz > 0.01) pose[o + 3] = Math.atan2(-dz, dx);
+  }
+
+  /** Lane-change offset at the trailing rear point (it passes each spot after the front). */
+  private rearLat(i: number): number {
+    const W = this.lcW[i]!;
+    return W === 0 ? 0 : W * lcProfile((this.lcDist[i]! - this.length[i]! * REAR_FRAC) / this.lcLen[i]!);
   }
 
   private updatePoses(): void {
@@ -877,6 +959,7 @@ export class TrafficSim {
       this.stopTime[i] = -1;
       this.lcCooldown[i] = old.lcCooldown[i]!;
       this.lat[i] = 0;
+      this.lcW[i] = 0;
       this.fromLane[i] = -1;
       this.lastLane[i] = last;
       this.enterTime[i] = onConnector ? old.time : Infinity;

@@ -13,6 +13,8 @@ export const SHADOW_STRIDE = 8;
 export const KIND_PLAIN = 0;
 export const KIND_FACADE = 1;
 export const KIND_VEHICLE = 2;
+/** Unlit, self-coloured (signal lamps, blinkers, editor overlay). Keep in sync with litFS. */
+export const KIND_EMISSIVE = 3;
 
 export type LotKind = 'house' | 'shop' | 'midrise' | 'park';
 export type KitName = 'box' | 'roof' | 'crown' | 'cone';

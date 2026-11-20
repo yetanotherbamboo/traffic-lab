@@ -28,6 +28,8 @@ export interface Conflict {
   hOther: number;
   /** True if a vehicle on self must give way to one on other. */
   yields: boolean;
+  /** The other connector comes from the opposite approach (oncoming traffic). */
+  oncoming: boolean;
 }
 
 export interface Phase {
@@ -329,8 +331,10 @@ export class JunctionModel {
       [sa, ha] = zoneAround(a.path, b.path, sa, h);
       [sb, hb] = zoneAround(b.path, a.path, sb, h);
     }
-    this.conflicts[a.id]!.push({ other: b.id, sSelf: sa, sOther: sb, h: ha, hOther: hb, yields: this.yields(nodeId, a, b) });
-    this.conflicts[b.id]!.push({ other: a.id, sSelf: sb, sOther: sa, h: hb, hOther: ha, yields: this.yields(nodeId, b, a) });
+    const lanes = this.graph.lanes;
+    const oncoming = vec3.dot(lanes[a.prev[0]!]!.path.dirAt(true), lanes[b.prev[0]!]!.path.dirAt(true)) < -0.7;
+    this.conflicts[a.id]!.push({ other: b.id, sSelf: sa, sOther: sb, h: ha, hOther: hb, yields: this.yields(nodeId, a, b), oncoming });
+    this.conflicts[b.id]!.push({ other: a.id, sSelf: sb, sOther: sa, h: hb, hOther: ha, yields: this.yields(nodeId, b, a), oncoming });
     this.conflictSet[a.id]!.add(b.id);
     this.conflictSet[b.id]!.add(a.id);
   }

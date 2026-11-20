@@ -193,6 +193,12 @@ _Last updated: 2026-11-20_
     - **Lane changes:** the sideways offset follows an S-curve over distance travelled (12–45 m, longer at speed), and the heading comes from front and rear points on that curve. Cars steer through a change at any speed instead of sliding sideways.
     - **Lane-change safety:** a change must fit before the end of the lane. A changer keeps clear of traffic ahead in its old lane until its rear is across. Cars still leaving a lane count as occupying it, so two cars can't swap lanes through each other.
 
+  - **Left turns, blinkers and light glow (2026-11-20):**
+    - **Waiting in the junction:** left-turners no longer wait at the stop line for oncoming traffic. They pull into the junction and wait part-way through the turn, just short of the oncoming lanes (`Conflict.oncoming`). Only one car per lane waits inside; the rest wait at the line. Crossing traffic from side roads is still checked at the line.
+    - **Impatience:** a driver who has waited a while accepts a smaller gap (margin 2 s → 1 s over 35 s).
+    - **Blinkers:** amber lamps at the front and rear corners blink, with a per-car phase, when turning within 45 m, through a turn, and during lane changes (`src/render/lights.ts`).
+    - **Glow:** soft premultiplied glow sprites with a minimum on-screen size, so signals stay readable when zoomed out and blinkers show at mid zoom. This adds 2 draw calls (lights, glows).
+
 ### Next
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**
 
@@ -206,6 +212,7 @@ _Last updated: 2026-11-20_
 - **Widening roads demolishes frontage:** adding lanes pushes sidewalks into lots, which are demolished (and paid for) immediately. The lanes panel has no cost preview.
 - **Lane-mapping on edits:** vehicles inside a junction whose connector no longer exists are removed rather than re-routed.
 - **Preview cost on phones:** each drag move clones the network, validates and rebuilds the road mesh, about 3 ms on a laptop. Watch for lag on the phone.
+- **Side roads at busy priority junctions:** a left-turner waiting in the middle physically blocks side-road traffic crossing its path (which gives way to it). With heavy main-road traffic, side-road cars can wait 3–5 minutes; the worst case in tests was 345 s, versus 214 s before. That's realistic, and a cue for the player to add signals, but the game layer should surface it (Milestone 7 metrics).
 - **Junction gap acceptance (fixed 2026-11-20):** a left-turner used to cut in front of oncoming traffic, for three reasons:
   - It estimated its own arrival as if it had already slowed to turning speed.
   - At higher approach speeds it committed before it started looking for gaps.

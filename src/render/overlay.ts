@@ -1,7 +1,6 @@
 import type { Vec3 } from '../core/math';
-import { LIT_STRIDE, type Lot } from '../env/city';
+import { KIND_EMISSIVE, LIT_STRIDE, type Lot } from '../env/city';
 import type { CubicBezier } from '../network/bezier';
-import { KIND_EMISSIVE } from './junctionProps';
 
 const Y = 0.24; // just above sidewalks
 

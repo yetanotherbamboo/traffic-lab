@@ -264,3 +264,50 @@ void main() {
   a *= 1.0 - zoneFade(vWorld);
   outColor = vec4(0.16, 0.18, 0.26, a);
 }`;
+
+/**
+ * Soft glow sprites (signal lamps, blinkers), premultiplied alpha: camera-facing quads that never shrink
+ * below `iMinAngle` radians on screen, so lights stay visible when zoomed out.
+ */
+export const glowVS = /* glsl */ `#version 300 es
+layout(location = 0) in vec3 aPos;      // unit quad on y = 0 (x, z in [-0.5, 0.5])
+layout(location = 3) in vec4 iPosSize;  // centre, world size (m)
+layout(location = 5) in vec3 iColor;    // colour × intensity
+layout(location = 8) in float iMinAngle;
+uniform mat4 uViewProj;
+uniform vec3 uCamPos;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+out vec2 vUv;
+out vec3 vColor;
+out vec3 vWorld;
+void main() {
+  vec3 c = iPosSize.xyz;
+  vec3 toCam = uCamPos - c;
+  float dist = length(toCam);
+  float size = max(iPosSize.w, dist * iMinAngle);
+  // Pulled towards the camera so the sprite isn't cut by the lamp's own housing.
+  vec3 p = c + toCam / dist * min(0.6, size * 0.5) + (uCamRight * aPos.x + uCamUp * aPos.z) * size;
+  vUv = aPos.xz * 2.0;
+  vColor = iColor;
+  vWorld = c;
+  gl_Position = uViewProj * vec4(p, 1.0);
+}`;
+
+export const glowFS = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+in vec3 vColor;
+in vec3 vWorld;
+out vec4 outColor;
+${COMMON}
+void main() {
+  float r2 = dot(vUv, vUv);
+  if (r2 >= 1.0) discard;
+  // Premultiplied: a saturated core that covers the ground (so colour reads on light pastel
+  // surfaces, where pure additive light washes out to white) plus a soft additive halo.
+  float core = exp(-r2 * 7.0) * (1.0 - r2);
+  float halo = 0.35 * exp(-r2 * 2.5) * (1.0 - r2);
+  float k = (1.0 - zoneFade(vWorld)) * (1.0 - smoothstep(uFog.x, uFog.y, length(vWorld - uCamPos)));
+  outColor = vec4(vColor * (core * 1.15 + halo) * k, core * 0.85 * k);
+}`;

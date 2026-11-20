@@ -6,6 +6,7 @@ import { idmAccel } from '../src/sim/idm';
 import { SIGNAL_GREEN, SIGNAL_RED, SIGNAL_YELLOW } from '../src/sim/junctions';
 import { LaneGraph } from '../src/sim/laneGraph';
 import { Path } from '../src/sim/path';
+import { blinkerSide } from '../src/render/lights';
 import { type Spawner, TrafficSim } from '../src/sim/traffic';
 
 const DT = 0.1;
@@ -275,6 +276,32 @@ describe('left turns', () => {
       expect(collisions, `seed ${seed}`).toBe(0);
       expect(sim.stats.exited).toBeGreaterThan(300);
     }
+  });
+});
+
+describe('blinkers', () => {
+  it('indicate turns at the junction and the direction of lane changes', () => {
+    const sim = junction('signal', MIXED, 450);
+    const seen = { left: 0, right: 0, straight: 0, lc: 0 };
+    for (let t = 0; t < 3000; t++) {
+      sim.step(DT);
+      for (let i = 0; i < sim.capacity; i++) {
+        if (!sim.alive[i]) continue;
+        const l = sim.graph.lanes[sim.lane[i]!]!;
+        const side = blinkerSide(sim, i);
+        if (sim.lcW[i] !== 0) {
+          // Positive offset = still right of the new lane = moving left.
+          expect(side).toBe(sim.lcW[i]! > 0 ? -1 : 1);
+          seen.lc++;
+        } else if (l.kind === 'connector') {
+          expect(side).toBe(l.turn === 'left' ? -1 : l.turn === 'right' ? 1 : 0);
+          seen[l.turn ?? 'straight']++;
+        } else if (l.path.length - sim.s[i]! > 60) {
+          expect(side).toBe(0); // far from the junction: no indicating yet
+        }
+      }
+    }
+    expect(Math.min(seen.left, seen.right, seen.straight, seen.lc)).toBeGreaterThan(0);
   });
 });
 

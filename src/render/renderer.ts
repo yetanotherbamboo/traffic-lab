@@ -4,17 +4,21 @@ import type { Zone } from '../env/zone';
 import { type Attrib, Mesh } from '../gl/mesh';
 import { Program } from '../gl/program';
 import type { OrbitCamera } from './camera';
+import { GLOW_STRIDE } from './lights';
 import {
   type Geometry, boxGeometry, carGeometry, coneGeometry, crownGeometry, planeGeometry, roofGeometry,
 } from './geometry';
 import type { MeshData } from './roadMesh';
-import { groundFS, groundVS, litFS, litInstancedVS, roadFS, roadVS, shadowFS, shadowVS } from './shaders';
+import {
+  glowFS, glowVS, groundFS, groundVS, litFS, litInstancedVS, roadFS, roadVS, shadowFS, shadowVS,
+} from './shaders';
 
 export { BACKGROUND };
 
 const POS_NORMAL: Attrib[] = [{ loc: 0, size: 3 }, { loc: 1, size: 3 }];
 const LIT_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 4, size: 3 }, { loc: 5, size: 3 }, { loc: 8, size: 1 }];
 const SHADOW_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 4, size: 2 }, { loc: 5, size: 2 }];
+const GLOW_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 5, size: 3 }, { loc: 8, size: 1 }];
 const KITS: Record<KitName, () => Geometry> = {
   box: boxGeometry, roof: roofGeometry, crown: crownGeometry, cone: coneGeometry,
 };
@@ -24,6 +28,9 @@ export class Renderer {
   private readonly roadProg: Program;
   private readonly litProg: Program;
   private readonly shadowProg: Program;
+  private readonly glowProg: Program;
+  private readonly glows: Mesh;
+  private readonly lights: Mesh;
   private readonly ground: Mesh;
   private readonly kits: Record<KitName, Mesh>;
   private readonly shadows: Mesh;
@@ -41,12 +48,14 @@ export class Renderer {
     this.roadProg = new Program(gl, roadVS, roadFS, 'road');
     this.litProg = new Program(gl, litInstancedVS, litFS, 'lit');
     this.shadowProg = new Program(gl, shadowVS, shadowFS, 'shadow');
+    this.glowProg = new Program(gl, glowVS, glowFS, 'glow');
 
     const plane = planeGeometry(4000);
     this.ground = new Mesh(gl, plane.vertices, [{ loc: 0, size: 3 }], plane.indices);
 
     const quad = planeGeometry(1);
     this.shadows = new Mesh(gl, quad.vertices, [{ loc: 0, size: 3 }], quad.indices, SHADOW_INSTANCE);
+    this.glows = new Mesh(gl, quad.vertices, [{ loc: 0, size: 3 }], quad.indices, GLOW_INSTANCE);
 
     const kits = {} as Record<KitName, Mesh>;
     for (const [name, make] of Object.entries(KITS) as [KitName, () => Geometry][]) {
@@ -60,7 +69,8 @@ export class Renderer {
     const box = boxGeometry();
     this.props = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
     this.overlay = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
-    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.props, this.overlay];
+    this.lights = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
+    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.props, this.lights, this.overlay];
   }
 
   /**
@@ -78,6 +88,21 @@ export class Renderer {
 
   setVehicles(data: Float32Array, count: number): void {
     this.upload(this.vehicles, data, count);
+  }
+
+  /** Small self-lit boxes on vehicles (blinkers). Same preallocated buffer every frame. */
+  setLights(data: Float32Array, count: number): void {
+    this.upload(this.lights, data, count);
+  }
+
+  /** Glow sprites (GLOW_STRIDE floats each). Same preallocated buffer every frame. */
+  setGlows(data: Float32Array, count: number): void {
+    if (!this.reserved.has(this.glows)) {
+      this.glows.setInstances(data, count);
+      this.reserved.add(this.glows);
+    } else {
+      this.glows.setInstances(data.subarray(0, count * GLOW_STRIDE), count);
+    }
   }
 
   /** Junction furniture (lines, poles, signs, signal lamps). */
@@ -164,6 +189,19 @@ export class Renderer {
     this.common(this.shadowProg, cam, time);
     this.shadows.draw();
     this.drawCalls++;
+
+    // Light glows: premultiplied alpha, camera-facing (so no face culling).
+    if (this.glows.instanceCount > 0) {
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.disable(gl.CULL_FACE);
+      const v = cam.view;
+      this.common(this.glowProg, cam, time)
+        .vec3('uCamRight', [v[0]!, v[4]!, v[8]!])
+        .vec3('uCamUp', [v[1]!, v[5]!, v[9]!]);
+      this.glows.draw();
+      this.drawCalls++;
+      gl.enable(gl.CULL_FACE);
+    }
     gl.depthMask(true);
     gl.disable(gl.BLEND);
   }

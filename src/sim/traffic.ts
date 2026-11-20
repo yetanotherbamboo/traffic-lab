@@ -23,6 +23,9 @@ const GHOST_LAT = 1.2; // m: while further than this from its new lane, a change
 const MOBIL = { politeness: 0.25, threshold: 0.2, bSafe: 4 };
 const DEADLOCK_TIME = 6; // s stopped inside a junction before the deadlock breaker kicks in
 const CRITICAL_GAP = 2.0; // s of margin when crossing in front of priority traffic
+/** Impatience: after waiting this long (s) the margin has shrunk to MIN_CRITICAL_GAP. */
+const PATIENCE = 35;
+const MIN_CRITICAL_GAP = 1.0;
 
 export interface Spawner {
   node: number;
@@ -40,6 +43,11 @@ export interface SimStats {
   laneChanges: number;
   /** Vehicles that ended up in a lane that could not reach their destination (missed turn). */
   reroutes: number;
+}
+
+/** Left turns wait for oncoming traffic inside the junction, partway into the turn. */
+function waitsInBox(C: Lane, c: Conflict): boolean {
+  return C.turn === 'left' && c.oncoming;
 }
 
 /** Lane-change S-curve: 1 at the start (still on the old lane's line), 0 at the end. */
@@ -99,6 +107,8 @@ export class TrafficSim {
   readonly lcLen: Float32Array;
   /** When the vehicle entered its current junction (Infinity while on a road lane). */
   readonly enterTime: Float32Array;
+  /** Seconds spent held by junction control in a row (drivers accept smaller gaps over time). */
+  readonly waitTime: Float32Array;
   /** Seconds stopped inside a junction, and whether the deadlock breaker is active for the vehicle. */
   readonly stuck: Float32Array;
   readonly breaking: Uint8Array;
@@ -149,6 +159,7 @@ export class TrafficSim {
     this.fromLane = new Int32Array(capacity).fill(-1);
     this.lastLane = new Int32Array(capacity).fill(-1);
     this.enterTime = new Float32Array(capacity).fill(Infinity);
+    this.waitTime = f32();
     this.stuck = f32();
     this.breaking = new Uint8Array(capacity);
     this.prevPose = new Float32Array(capacity * POSE_STRIDE);
@@ -424,15 +435,16 @@ export class TrafficSim {
    * Can vehicle i (front `d` m before connector C) cross conflict `c` before priority traffic
    * arrives? `distJ` is how far vehicle j's front is from the conflict point.
    */
-  private clearOf(j: number, distJ: number, c: Conflict, tIn: number, tOut: number): boolean {
+  private clearOf(j: number, distJ: number, c: Conflict, tIn: number, tOut: number, margin = CRITICAL_GAP): boolean {
     if (distJ + this.length[j]! < -c.hOther) return true; // already through
     const dIn = distJ - c.hOther;
     if (dIn <= 0) return false; // in the zone
-    if (this.waiting[j] && dIn > 2) return true; // held by its own control
+    // Held by its own control (or waiting in the box for a gap) and able to stay before the zone.
+    if (this.waiting[j] && dIn > 0.3 + (this.v[j]! * this.v[j]!) / 8) return true;
     const vj = this.v[j]!;
     const tjIn = dIn / Math.max(vj, 0.1);
     const tjOut = (dIn + 2 * c.hOther + this.length[j]!) / Math.max(vj, 1);
-    return tjIn > tOut + CRITICAL_GAP || tjOut < tIn - 0.3;
+    return tjIn > tOut + margin || tjOut < tIn - 0.3;
   }
 
   private gapOk(i: number, C: Lane, d: number, c: Conflict): boolean {
@@ -444,8 +456,10 @@ export class TrafficSim {
     // "they are through before I arrive" with a late arrival estimate would cut in front of them.
     const tIn = timeTo(d + c.sSelf - c.h, v, this.aMax[i]!, Math.max(vmax, v));
     const tOut = timeTo(d + c.sSelf + c.h + this.length[i]!, v, this.aMax[i]!, vmax);
+    // Impatience: a driver who has waited a long time accepts a smaller (still safe) gap.
+    const margin = Math.max(MIN_CRITICAL_GAP, CRITICAL_GAP - (CRITICAL_GAP - MIN_CRITICAL_GAP) * (this.waitTime[i]! / PATIENCE));
     for (const j of this.laneVehicles[c.other]!) {
-      if (!this.clearOf(j, c.sOther - this.s[j]!, c, tIn, tOut)) return false;
+      if (!this.clearOf(j, c.sOther - this.s[j]!, c, tIn, tOut, margin)) return false;
     }
     const O = lanes[c.other]!;
     for (const p of O.prev) {
@@ -456,7 +470,7 @@ export class TrafficSim {
         if (this.nextOf(j, p) !== c.other) continue;
         const dist = len - this.s[j]! + c.sOther;
         if (dist > 120) break;
-        if (!this.clearOf(j, dist, c, tIn, tOut)) return false;
+        if (!this.clearOf(j, dist, c, tIn, tOut, margin)) return false;
         if (++seen >= 3) break;
       }
     }
@@ -512,8 +526,6 @@ export class TrafficSim {
       const v = this.v[i]!;
       if (st === SIGNAL_RED) return true;
       if (st === SIGNAL_YELLOW && d > (v * v) / (2 * this.b[i]!) + 1) return true;
-      // Only one vehicle per movement waits inside the junction for a gap; the rest wait at the line.
-      for (const j of this.laneVehicles[C.id]!) if (this.waiting[j]) return true;
       // Clearance: let vehicles left over from the previous phase finish crossing first.
       for (const c of this.junctions.conflicts[C.id]!) {
         if (this.junctions.signalOf[c.other]!.state(c.other) !== SIGNAL_RED) continue;
@@ -524,10 +536,15 @@ export class TrafficSim {
     } else if (ctrl === 'allway') {
       if (!this.allwayClear(i, C, d)) return true;
     }
+    // Only one vehicle per movement waits inside the junction for a gap; the rest wait at the line.
+    if (ctrl !== 'allway') for (const j of this.laneVehicles[C.id]!) if (this.waiting[j]) return true;
     // Look for gaps from before the point where stopping stops being comfortable (we commit there).
     const gapRange = Math.max(GAP_RANGE, (this.v[i]! * this.v[i]!) / (2 * this.b[i]!) + 10);
     if (ctrl !== 'allway' && d < gapRange) {
-      for (const c of this.junctions.conflicts[C.id]!) if (c.yields && !this.gapOk(i, C, d, c)) return true;
+      for (const c of this.junctions.conflicts[C.id]!) {
+        // Left turns wait for oncoming traffic inside the junction (see junctionLimit), not at the line.
+        if (c.yields && !waitsInBox(C, c) && !this.gapOk(i, C, d, c)) return true;
+      }
     }
     // Vehicles already inside the junction have right of way over everyone still outside.
     if (d < gapRange) {
@@ -580,11 +597,13 @@ export class TrafficSim {
       }
       if (entry > 40) continue;
       let hold = this.zoneOccupied(i, c);
-      // Waiting mid-junction is only safe at signals (crossing traffic has red); elsewhere drivers commit.
-      if (!hold && signal && c.yields && pos >= 0 && entry > brake + 0.5) hold = !this.gapOk(i, C, d, c);
+      // Waiting mid-junction: left turns pull in and wait for a gap in oncoming traffic; at signals
+      // any movement may wait inside (crossing traffic has red). Elsewhere drivers commit.
+      const inBox = waitsInBox(C, c) || (signal && pos >= 0);
+      if (!hold && c.yields && inBox && entry > brake + 0.5) hold = !this.gapOk(i, C, d, c);
       if (hold) {
         limit = Math.min(limit, this.stopAccel(i, entry - 0.5));
-        if (pos >= 0) this.waiting[i] = 1;
+        this.waiting[i] = 1;
       }
     }
     return limit;
@@ -727,6 +746,7 @@ export class TrafficSim {
       }
       this.v[i] = v1;
       if (this.lcCooldown[i]! > 0) this.lcCooldown[i] = this.lcCooldown[i]! - dt;
+      this.waitTime[i] = this.waiting[i] && v1 < 2 ? this.waitTime[i]! + dt : 0;
       if (this.lcW[i] !== 0) {
         const d = this.lcDist[i]! + ds;
         this.lcDist[i] = d;

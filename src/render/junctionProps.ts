@@ -1,11 +1,10 @@
 import type { Vec3 } from '../core/math';
-import { KIND_PLAIN, LIT_STRIDE } from '../env/city';
+import { KIND_EMISSIVE, KIND_PLAIN, LIT_STRIDE } from '../env/city';
 import { rightOf } from '../network/network';
 import { SIGNAL_GREEN, SIGNAL_RED, type SignalController } from '../sim/junctions';
 import type { TrafficSim } from '../sim/traffic';
+import { GLOW_STRIDE } from './lights';
 
-/** Instance kind: unlit, self-coloured (signal lamps). Keep in sync with litFS. */
-export const KIND_EMISSIVE = 3;
 
 const PAINT: Vec3 = [0.93, 0.92, 0.88];
 const POLE: Vec3 = [0.3, 0.32, 0.36];
@@ -13,6 +12,9 @@ const STOP_SIGN: Vec3 = [0.84, 0.27, 0.24];
 const LAMP: Record<number, Vec3> = { 0: [0.35, 0.92, 0.55], 1: [1.0, 0.76, 0.3], 2: [0.98, 0.32, 0.28] };
 const SIDEWALK_Y = 0.18;
 const ROAD_Y = 0.03;
+
+/** Height of the lit lamp's box above the signal head's base (red top, green bottom). */
+const lampHeight = (st: number): number => (st === SIGNAL_RED ? 0.82 : st === SIGNAL_GREEN ? 0.12 : 0.47);
 
 interface Lamp {
   ctrl: SignalController;
@@ -127,13 +129,37 @@ export class JunctionProps {
     this.buffer.set(this.fixed);
   }
 
+  /**
+   * Writes a glow sprite (GLOW_STRIDE floats) for every lit lamp into `out` starting at sprite
+   * `start`, so signals stay readable when zoomed out. Returns the number written.
+   */
+  writeGlows(out: Float32Array, start: number): number {
+    let o = start * GLOW_STRIDE;
+    for (const l of this.lamps) {
+      const st = l.ctrl.state(l.connector);
+      const c = LAMP[st]!;
+      out[o] = l.x - l.dir[0] * 0.3;
+      out[o + 1] = SIDEWALK_Y + 2.5 + lampHeight(st) + 0.13;
+      out[o + 2] = l.z - l.dir[2] * 0.3;
+      out[o + 3] = 1.3; // world size (m)
+      out[o + 4] = c[0] * 1.1; out[o + 5] = c[1] * 1.1; out[o + 6] = c[2] * 1.1;
+      out[o + 7] = 0.03; // at least ~1.7° on screen: readable when zoomed out
+      o += GLOW_STRIDE;
+    }
+    return this.lamps.length;
+  }
+
+  get lampCount(): number {
+    return this.lamps.length;
+  }
+
   /** Updates lamp instances in `buffer` for the current signal states; returns the instance count. */
   update(): number {
     let o = this.fixed.length;
     for (const l of this.lamps) {
       const st = l.ctrl.state(l.connector);
       const c = LAMP[st]!;
-      const y = SIDEWALK_Y + 2.5 + (st === SIGNAL_RED ? 0.82 : st === SIGNAL_GREEN ? 0.12 : 0.47);
+      const y = SIDEWALK_Y + 2.5 + lampHeight(st);
       const b = this.buffer;
       b[o] = l.x - l.dir[0] * 0.22;
       b[o + 1] = y;

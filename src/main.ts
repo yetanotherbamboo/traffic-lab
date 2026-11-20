@@ -7,6 +7,7 @@ import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from './game/tes
 import { World } from './game/world';
 import { writeVehicleInstances } from './render/vehicles';
 import { JunctionProps } from './render/junctionProps';
+import { GLOW_STRIDE, type LightCounts, writeVehicleLights } from './render/lights';
 import { OverlayBuilder } from './render/overlay';
 import { CameraController } from './input/cameraController';
 import { OrbitCamera } from './render/camera';
@@ -38,6 +39,11 @@ const world = new World(buildTestNetwork(), zone, TEST_SEED, testSpawners);
 const genMs = performance.now() - t0;
 for (let i = 0; i < 900; i++) world.sim.step(SIM_STEP); // warm up 90 s so the streets aren't empty
 const vehicleData = new Float32Array(world.sim.capacity * LIT_STRIDE);
+// Blinkers: up to 2 lamps per vehicle; glows for those plus every signal lamp.
+const MAX_LAMP_GLOWS = 1024;
+const lightData = new Float32Array(world.sim.capacity * 2 * LIT_STRIDE);
+const glowData = new Float32Array((world.sim.capacity * 2 + MAX_LAMP_GLOWS) * GLOW_STRIDE);
+const lightCounts: LightCounts = { boxes: 0, glows: 0 };
 let props = new JunctionProps(world.sim);
 
 // ---------------------------------------------------------------- editor
@@ -142,6 +148,10 @@ const loop = new FixedLoop(
     camera.update(canvas.width / canvas.height);
     renderer.setVehicles(vehicleData, writeVehicleInstances(world.sim, alpha, vehicleData));
     renderer.setProps(props.buffer, props.update());
+    const lamps = props.lampCount <= MAX_LAMP_GLOWS ? props.writeGlows(glowData, 0) : 0;
+    writeVehicleLights(world.sim, alpha, time, lightData, glowData, lamps, lightCounts);
+    renderer.setLights(lightData, lightCounts.boxes);
+    renderer.setGlows(glowData, lamps + lightCounts.glows);
     renderer.render(camera, canvas.width, canvas.height, time);
 
     if (frameDt > 0) fps += (1 / frameDt - fps) * 0.05;

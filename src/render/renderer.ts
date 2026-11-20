@@ -19,6 +19,7 @@ const POS_NORMAL: Attrib[] = [{ loc: 0, size: 3 }, { loc: 1, size: 3 }];
 const LIT_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 4, size: 3 }, { loc: 5, size: 3 }, { loc: 8, size: 1 }];
 const SHADOW_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 4, size: 2 }, { loc: 5, size: 2 }];
 const GLOW_INSTANCE: Attrib[] = [{ loc: 3, size: 4 }, { loc: 5, size: 3 }, { loc: 8, size: 1 }];
+const ROAD_LAYOUT: Attrib[] = [{ loc: 0, size: 3 }, { loc: 1, size: 3 }, { loc: 2, size: 2 }, { loc: 6, size: 3 }, { loc: 7, size: 1 }];
 const KITS: Record<KitName, () => Geometry> = {
   box: boxGeometry, roof: roofGeometry, crown: crownGeometry, cone: coneGeometry,
 };
@@ -41,6 +42,7 @@ export class Renderer {
   private readonly litMeshes: Mesh[];
   private readonly reserved = new Set<Mesh>();
   private roads: Mesh | null = null;
+  private paint: Mesh | null = null;
   private zone: Zone = { cx: 0, cz: 0, hx: 1e5, hz: 1e5, radius: 0, contextScale: 2 };
   drawCalls = 0;
 
@@ -130,9 +132,13 @@ export class Renderer {
 
   setRoads(data: MeshData): void {
     this.roads?.dispose();
-    this.roads = new Mesh(this.gl, data.vertices, [
-      { loc: 0, size: 3 }, { loc: 1, size: 3 }, { loc: 2, size: 2 }, { loc: 6, size: 3 }, { loc: 7, size: 1 },
-    ], data.indices);
+    this.roads = new Mesh(this.gl, data.vertices, ROAD_LAYOUT, data.indices);
+  }
+
+  /** Flat road paint (lane arrows), drawn with the road shader just above the asphalt. */
+  setPaint(data: MeshData): void {
+    this.paint?.dispose();
+    this.paint = data.indices.length > 0 ? new Mesh(this.gl, data.vertices, ROAD_LAYOUT, data.indices) : null;
   }
 
   setCity(city: City): void {
@@ -178,6 +184,14 @@ export class Renderer {
       this.common(this.roadProg, cam, time);
       this.roads.draw();
       this.drawCalls++;
+      if (this.paint) {
+        // Pulled towards the camera in depth so it never flickers into the asphalt below.
+        gl.enable(gl.POLYGON_OFFSET_FILL);
+        gl.polygonOffset(-1, -2);
+        this.paint.draw();
+        gl.disable(gl.POLYGON_OFFSET_FILL);
+        this.drawCalls++;
+      }
     }
 
     this.common(this.litProg, cam, time);

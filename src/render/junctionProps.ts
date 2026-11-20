@@ -5,6 +5,7 @@ import { type JunctionModel, SIGNAL_GREEN, SIGNAL_RED, type SignalController } f
 import { type Lane, type LaneGraph, TURN_BIT } from '../sim/laneGraph';
 import type { TrafficSim } from '../sim/traffic';
 import { GLOW_STRIDE } from './lights';
+import { MAT_PAINT, type MeshData, ROAD_STRIDE } from './roadMesh';
 
 
 const PAINT: Vec3 = [0.93, 0.92, 0.88];
@@ -17,11 +18,19 @@ const SIDEWALK_Y = 0.18;
 const ARROW_BACK = 8;
 /** Approaches shorter than this get no arrow (it is 3.6 m long and must clear the stop line). */
 const ARROW_MIN_LANE = 5.5;
-/** Arrow paint: stroke width, sideways reach of turn branches, head stroke length and angle. */
-const ARROW_STROKE = 0.26;
-const ARROW_SPREAD = 0.7;
-const ARROW_HEAD = 0.62;
-const ARROW_HEAD_ANGLE = 0.55;
+/** Arrow shape (m): stem width, head half-width and length, stem length to the head. */
+const ARROW_STEM = 0.26;
+const ARROW_HEAD_HALF = 0.4;
+const ARROW_HEAD_LEN = 1.05;
+const ARROW_LEN = 3.6;
+/** Turn branches leave the stem here and end (where their head starts) this far ahead and aside. */
+const BRANCH_FROM = 1.0;
+const BRANCH_END_F = 2.3;
+const BRANCH_END_U = 0.5;
+const BRANCH_HEAD_LEN = 0.62;
+const BRANCH_HEAD_HALF = 0.34;
+/** Painted shapes lie flat just above the asphalt (which is lifted 0.03 m). */
+const PAINT_Y = 0.04;
 const scratch = new Float32Array(4);
 const ROAD_Y = 0.03;
 
@@ -43,6 +52,90 @@ function mainPath(graph: LaneGraph, l: Lane): Lane | null {
   return conns.find((c) => c.turn === 'straight') ?? (conns.length === 1 ? conns[0]! : null);
 }
 
+/** Flat painted shapes on the road (road vertex layout, `MAT_PAINT`), facing up. */
+class PaintBuilder {
+  readonly v: number[] = [];
+  readonly i: number[] = [];
+
+  private vertex(p: Vec3): number {
+    this.v.push(p[0], p[1], p[2], 0, 1, 0, 0, 0, 0, 0, 0, MAT_PAINT);
+    return this.v.length / ROAD_STRIDE - 1;
+  }
+
+  /** One triangle, wound to face up whatever order the corners come in. */
+  tri(a: Vec3, b: Vec3, c: Vec3): void {
+    const up = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]); // y of (b-a)×(c-a)
+    const [ia, ib, ic] = [this.vertex(a), this.vertex(b), this.vertex(c)];
+    if (up >= 0) this.i.push(ia, ib, ic);
+    else this.i.push(ia, ic, ib);
+  }
+
+  quad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
+    this.tri(a, b, c);
+    this.tri(a, c, d);
+  }
+
+  build(): MeshData {
+    return { vertices: new Float32Array(this.v), indices: new Uint32Array(this.i) };
+  }
+}
+
+/**
+ * A lane arrow as solid paint, the way road arrows look: a straight bar with a broad triangular
+ * head, and turn branches that curve smoothly off the bar into their own head. `at(f, u)` maps
+ * arrow coordinates (f metres forward from its base, u metres right of the lane centre) to the
+ * road, following the lane's path.
+ */
+function arrowShape(at: (f: number, u: number) => Vec3, turns: Set<string>, out: PaintBuilder): void {
+  const w = ARROW_STEM / 2;
+  const straight = turns.has('straight');
+  const stemEnd = straight ? ARROW_LEN - ARROW_HEAD_LEN + 0.05 : BRANCH_FROM + 0.3;
+  // Stem, in short pieces so it bends with curved lanes.
+  const n = Math.max(2, Math.ceil(stemEnd / 0.6));
+  for (let k = 0; k < n; k++) {
+    const f0 = (stemEnd * k) / n, f1 = (stemEnd * (k + 1)) / n;
+    out.quad(at(f0, -w), at(f0, w), at(f1, w), at(f1, -w));
+  }
+  if (straight) {
+    const hb = ARROW_LEN - ARROW_HEAD_LEN;
+    out.tri(at(hb, -ARROW_HEAD_HALF), at(hb, ARROW_HEAD_HALF), at(ARROW_LEN, 0));
+  }
+  for (const [t, sgn] of [['left', -1], ['right', 1]] as const) {
+    if (!turns.has(t)) continue;
+    // Quadratic curve (in f, u) from the stem out to the side, drawn as a band of stem width.
+    const P0 = [BRANCH_FROM, 0], P1 = [BRANCH_END_F - 0.35, 0], P2 = [BRANCH_END_F, sgn * BRANCH_END_U];
+    const point = (s: number): [number, number] => {
+      const a = (1 - s) * (1 - s), b = 2 * s * (1 - s), c = s * s;
+      return [a * P0[0]! + b * P1[0]! + c * P2[0]!, a * P0[1]! + b * P1[1]! + c * P2[1]!];
+    };
+    const tangent = (s: number): [number, number] => {
+      const x = 2 * (1 - s) * (P1[0]! - P0[0]!) + 2 * s * (P2[0]! - P1[0]!);
+      const y = 2 * (1 - s) * (P1[1]! - P0[1]!) + 2 * s * (P2[1]! - P1[1]!);
+      const l = Math.hypot(x, y) || 1;
+      return [x / l, y / l];
+    };
+    const steps = 8;
+    let prevL: Vec3 | null = null, prevR: Vec3 | null = null;
+    for (let k = 0; k <= steps; k++) {
+      const s = k / steps;
+      const [f, u] = point(s), [df, du] = tangent(s);
+      // Normal to the curve (left/right of its direction) in (f, u).
+      const L = at(f + du * w, u - df * w), R = at(f - du * w, u + df * w);
+      if (prevL && prevR) out.quad(prevL, prevR, R, L);
+      prevL = L;
+      prevR = R;
+    }
+    // Head along the branch's end direction.
+    const [ef, eu] = point(1), [df, du] = tangent(1);
+    const bf = ef - df * 0.05, bu = eu - du * 0.05;
+    out.tri(
+      at(bf + du * BRANCH_HEAD_HALF, bu - df * BRANCH_HEAD_HALF),
+      at(bf - du * BRANCH_HEAD_HALF, bu + df * BRANCH_HEAD_HALF),
+      at(ef + df * BRANCH_HEAD_LEN, eu + du * BRANCH_HEAD_LEN),
+    );
+  }
+}
+
 /**
  * Junction furniture drawn with the box kit: stop / give-way lines, traffic-light poles and heads,
  * stop signs, plus signal lamps whose colour and position follow the live signal state.
@@ -53,10 +146,13 @@ export class JunctionProps {
   readonly buffer: Float32Array;
   /** Approach lanes that got turn arrows (for tests). */
   arrowLanes = 0;
+  /** Lane arrows: flat painted shapes in the road vertex layout. */
+  readonly paint: MeshData;
 
   constructor(sim: TrafficSim) {
     const { junctions, graph } = sim;
     const out: number[] = [];
+    const paint = new PaintBuilder();
     const box = (p: Vec3, heading: number, scale: Vec3, color: Vec3): void => {
       out.push(p[0], p[1], p[2], heading, scale[0], scale[1], scale[2], color[0], color[1], color[2], KIND_PLAIN);
     };
@@ -109,34 +205,9 @@ export class JunctionProps {
             const at = (f: number, u: number): Vec3 => {
               l.path.sample(l.path.length - D + f, scratch);
               const h = scratch[3]!, rx = Math.sin(h), rz = Math.cos(h); // right of (cos h, -sin h)
-              return [scratch[0]! + rx * u, ROAD_Y, scratch[2]! + rz * u];
+              return [scratch[0]! + rx * u, PAINT_Y, scratch[2]! + rz * u];
             };
-            const seg = (a: Vec3, b: Vec3, w: number): void => {
-              const dx = b[0] - a[0], dz = b[2] - a[2];
-              box([(a[0] + b[0]) / 2, ROAD_Y, (a[2] + b[2]) / 2], Math.atan2(-dz, dx), [Math.hypot(dx, dz) + w * 0.5, 0.02, w], PAINT);
-            };
-            const head = (tip: Vec3, from: Vec3): void => {
-              const dx = tip[0] - from[0], dz = tip[2] - from[2], len = Math.hypot(dx, dz) || 1;
-              const ux = dx / len, uz = dz / len;
-              for (const sgn of [1, -1]) {
-                const c = Math.cos(ARROW_HEAD_ANGLE), sn = Math.sin(ARROW_HEAD_ANGLE) * sgn;
-                const bx = -(ux * c - uz * sn), bz = -(uz * c + ux * sn); // rotated back-pointing
-                seg(tip, [tip[0] + bx * ARROW_HEAD, 0, tip[2] + bz * ARROW_HEAD], ARROW_STROKE);
-              }
-            };
-            const base = at(0, 0), fork = at(1.8, 0);
-            seg(base, fork, ARROW_STROKE);
-            if (turns.has('straight')) {
-              const tip = at(3.6, 0);
-              seg(fork, tip, ARROW_STROKE);
-              head(tip, fork);
-            }
-            for (const [t, u] of [['left', -1], ['right', 1]] as const) {
-              if (!turns.has(t)) continue;
-              const tip = at(2.9, u * ARROW_SPREAD);
-              seg(fork, tip, ARROW_STROKE);
-              head(tip, fork);
-            }
+            arrowShape(at, turns, paint);
           }
         }
         for (const id of laneIds) if (junctions.free[id]) this.nonStopLines(graph, junctions, id, box);
@@ -161,6 +232,7 @@ export class JunctionProps {
         }
       }
     }
+    this.paint = paint.build();
     this.fixed = new Float32Array(out);
     this.buffer = new Float32Array(this.fixed.length + this.lamps.length * LIT_STRIDE);
     this.buffer.set(this.fixed);

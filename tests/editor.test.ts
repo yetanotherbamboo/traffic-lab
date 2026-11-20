@@ -9,7 +9,6 @@ import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
 import { World } from '../src/game/world';
-import { LIT_STRIDE } from '../src/env/city';
 import { JunctionProps } from '../src/render/junctionProps';
 import { type LaneProfile, RoadNetwork, TURN_LEFT, TURN_RIGHT, TURN_STRAIGHT, rightOf } from '../src/network/network';
 import { ROAD_STRIDE } from '../src/render/roadMesh';
@@ -341,17 +340,27 @@ describe('turn arrows', () => {
     expect(props.arrowLanes).toBe(limited.filter((l) => l.path.length >= 5.5).length);
     expect(limited.some((l) => l.path.length >= 5.5 && l.path.length < 14)).toBe(true); // close junctions covered
 
-    // Arrow stems (0.26 m wide, 1.8 m long: the base and the straight-ahead part) sit on a lane's
-    // centre line, also on the curved approaches.
-    const b = props.buffer;
-    let stems = 0;
-    for (let o = 0; o < b.length; o += LIT_STRIDE) {
-      if (Math.abs(b[o + 1]! - 0.03) > 1e-4 || Math.abs(b[o + 6]! - 0.26) > 1e-4 || Math.abs(b[o + 4]! - 1.93) > 0.05) continue;
-      const dist = Math.min(...approaches.map((l) => l.path.project(b[o]!, b[o + 2]!).dist));
-      expect(dist).toBeLessThan(0.15);
-      stems++;
+    // Arrows are flat painted shapes (road vertex layout): every triangle faces up, every corner
+    // lies well inside an approach lane (also on curved approaches), and each arrow lane has its
+    // stem on the lane's centre line.
+    const { vertices: V, indices: I } = props.paint;
+    expect(I.length).toBeGreaterThan(0);
+    const pt = (k: number): Vec3 => [V[k * ROAD_STRIDE]!, V[k * ROAD_STRIDE + 1]!, V[k * ROAD_STRIDE + 2]!];
+    for (let t = 0; t < I.length; t += 3) {
+      const a = pt(I[t]!), b = pt(I[t + 1]!), c = pt(I[t + 2]!);
+      expect((b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2])).toBeGreaterThan(0);
     }
-    expect(stems).toBeGreaterThanOrEqual(props.arrowLanes);
+    const n = V.length / ROAD_STRIDE;
+    for (let k = 0; k < n; k++) {
+      const p = pt(k);
+      expect(Math.min(...approaches.map((l) => l.path.project(p[0], p[2]).dist))).toBeLessThan(1.2);
+    }
+    const arrowed = limited.filter((l) => l.path.length >= 5.5);
+    for (const l of arrowed) {
+      let near = Infinity;
+      for (let k = 0; k < n; k++) near = Math.min(near, l.path.project(pt(k)[0], pt(k)[2]).dist);
+      expect(near).toBeLessThan(0.2);
+    }
   });
 
   it('are left off lanes that may go every way, and appear once a lane is limited', () => {

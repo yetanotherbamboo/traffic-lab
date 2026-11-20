@@ -106,6 +106,7 @@ function syncScene(): void {
   if (world.version !== seenWorld) {
     seenWorld = world.version;
     props = new JunctionProps(world.sim);
+    renderer.setPaint(props.paint);
   }
   if (world.cityVersion !== seenCity) {
     seenCity = world.cityVersion;

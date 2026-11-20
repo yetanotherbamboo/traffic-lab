@@ -136,6 +136,8 @@ void main() {
   vec3 col;
   if (vMat == 1) {
     col = vec3(0.84, 0.81, 0.75);
+  } else if (vMat == 3) {
+    col = mix(vec3(0.40, 0.40, 0.43), vec3(0.93, 0.92, 0.88), 0.9); // paint, like the lane lines
   } else {
     col = vec3(0.40, 0.40, 0.43);
     if (vMat == 0) {

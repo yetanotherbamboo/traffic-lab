@@ -6,6 +6,13 @@ A browser game about building and redesigning roads, with a realistic traffic si
 
 Traffic Lab is an early test version. Your city is saved in your browser, so you can come back to it later; **↺ Reset** (top right) starts over.
 
+**Add it to your home screen** to play full screen like an app:
+
+- **iPhone / iPad (Safari):** tap the Share button, then **Add to Home Screen**.
+- **Android (Chrome):** tap the **⋮** menu, then **Add to Home screen** (or **Install app**).
+
+On iPhone the home-screen app keeps its own city, separate from the one in Safari.
+
 ## How to play
 
 The toolbar at the bottom has the tools:

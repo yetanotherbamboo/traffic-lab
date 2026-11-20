@@ -3,6 +3,9 @@ import type { CubicBezier } from '../network/bezier';
 import type { RoadNetwork } from '../network/network';
 import { BOUNDARY_TOL, halfWidth, sampleCurve } from './rules';
 
+/** Shortest ring road between neighbouring entries (duplicated from roundabout.ts to avoid a cycle). */
+const MIN_RING_ARC = 5;
+
 /** Shortest drivable stretch of road between two junctions (m). */
 export const MIN_ROAD = 6;
 /** Smallest angle between neighbouring roads at a junction. */
@@ -45,7 +48,21 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
       }
     }
     const [s0, s1] = net.trimmedRange(seg);
-    if (s1 - s0 < MIN_ROAD) return 'Too short: junctions are too close together';
+    if (seg.ring !== undefined) {
+      // Ring roads are tight by design (lanes lie outside the island edge they follow).
+      if (s1 - s0 < MIN_RING_ARC) return 'Roundabout is too small for these roads: make it bigger';
+    } else if (s1 - s0 < MIN_ROAD) {
+      return 'Too short: junctions are too close together';
+    }
+
+    // Roads must not cross a roundabout's island.
+    if (seg.ring === undefined) {
+      for (const r of net.roundabouts.values()) {
+        for (const { p } of pts) {
+          if (Math.hypot(p[0] - r.centre[0], p[2] - r.centre[2]) < r.radius - 0.5) return "Roads can't cross a roundabout's island";
+        }
+      }
+    }
 
     // Tightest bend: the inner kerb must not fold over.
     const hw = halfWidth(seg);
@@ -55,13 +72,15 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
       let dh = Math.abs(h2 - h1);
       if (dh > Math.PI) dh = 2 * Math.PI - dh;
       const ds = (pts[k + 1]!.s - pts[k - 1]!.s) / 2;
-      if (dh > 1e-4 && ds / dh < hw + 4) return 'Curve is too tight for this road';
+      if (seg.ring === undefined && dh > 1e-4 && ds / dh < hw + 4) return 'Curve is too tight for this road';
     }
 
     // Overlap with roads it doesn't share a junction with (at shared junctions the angle check applies).
     const mine = sampleCurve(seg.curve, 2, s0 + 0.5, Math.max(s0 + 0.5, s1 - 0.5));
     for (const other of net.segments.values()) {
       if (other.id === id || other.a === seg.a || other.a === seg.b || other.b === seg.a || other.b === seg.b) continue;
+      // A ring and the roads joining it meet at its junctions (the ring's lanes lie on its outside).
+      if (sameRoundabout(net, seg, other) || sameRoundabout(net, other, seg)) continue;
       if (!boxesNear(seg.curve, other.curve, hw + halfWidth(other))) continue;
       const [o0, o1] = net.trimmedRange(other);
       if (o1 - o0 < 0.5) continue;
@@ -89,4 +108,10 @@ function boxesNear(a: CubicBezier, b: CubicBezier, pad: number): boolean {
   };
   const A = box(a), B = box(b);
   return A[0] - pad <= B[1] && B[0] - pad <= A[1] && A[2] - pad <= B[3] && B[2] - pad <= A[3];
+}
+
+/** Is `ring` a ring road and `other` a ring road or entry of the same roundabout? */
+function sameRoundabout(net: RoadNetwork, ring: { ring?: number }, other: { a: number; b: number; ring?: number }): boolean {
+  if (ring.ring === undefined) return false;
+  return other.ring === ring.ring || net.node(other.a).ring === ring.ring || net.node(other.b).ring === ring.ring;
 }

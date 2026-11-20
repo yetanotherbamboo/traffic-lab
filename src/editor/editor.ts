@@ -1,8 +1,9 @@
 import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import type { LaneProfile, RoadNetwork } from '../network/network';
-import { type EditResult, EditError, addRoad, bendRoad, deleteRoad } from './ops';
+import { type EditResult, EditError, addRoad, bendRoad, deleteRoad, touchedAround } from './ops';
 import { type Pick, pickAt } from './pick';
+import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
 import { type Anchor, snapPoint } from './snap';
 import { validate } from './validate';
@@ -116,8 +117,10 @@ export class Editor {
     }
     if (this.tool === 'bend') {
       const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
-      if (pick?.kind !== 'segment') {
-        this.message = 'Drag the middle of a road inside the zone to bend it';
+      if (pick?.kind !== 'segment' || this.net.segment(pick.id).ring !== undefined) {
+        this.message = pick?.kind === 'segment'
+          ? 'Roundabouts keep their round shape: change their size with the Edit tool'
+          : 'Drag the middle of a road inside the zone to bend it';
         this.changed();
         return true; // still swallow the drag so the view doesn't jump
       }
@@ -180,6 +183,12 @@ export class Editor {
     this.message = null;
     const net = this.net;
     if (this.tool === 'select') {
+      const r = roundaboutAt(net, p, tol * 0.5);
+      if (r && zoneDistance(this.host.zone, r.centre[0], r.centre[2]) < 0) {
+        this.selection = { kind: 'roundabout', id: r.id, pos: r.centre };
+        this.changed();
+        return;
+      }
       const pick = pickAt(net, p, tol, {
         node: (id) => net.node(id).segments.length >= 3 && nodeConnectable(net, this.host.zone, id),
         segment: this.editable,
@@ -188,7 +197,9 @@ export class Editor {
       if (!pick) this.message = 'Tap a road or junction inside the zone';
     } else if (this.tool === 'delete') {
       const pick = pickAt(net, p, tol, { node: () => false, segment: this.editable });
-      if (pick?.kind === 'segment') this.apply((n) => deleteRoad(n, pick.id));
+      const ring = pick?.kind === 'segment' ? net.segment(pick.id).ring : undefined;
+      if (ring !== undefined) this.apply((n) => removeRing(n, ring));
+      else if (pick?.kind === 'segment') this.apply((n) => deleteRoad(n, pick.id));
       else this.message = 'Tap a road inside the zone to remove it';
     }
     this.changed();
@@ -207,8 +218,10 @@ export class Editor {
     let touched: number[] = [], changed: number[] = [], cost = 0, error = err;
     try {
       const r = op(candidate);
-      touched = r.touched;
-      changed = r.changed;
+      // Roads joining or leaving a roundabout may need its ring rebuilt around them.
+      const ring = tidyRoundabouts(candidate);
+      touched = ring.length > 0 ? [...new Set([...r.touched, ...touchedAround(candidate, ring)])] : r.touched;
+      changed = ring.length > 0 ? [...r.changed, ...ring] : r.changed;
       cost = r.cost;
       error ??= validate(candidate, this.host.zone, touched, r.changed);
     } catch (e) {
@@ -278,5 +291,12 @@ export class Editor {
     const net = this.net;
     if (s.kind === 'node' && (!net.nodes.has(s.id) || net.node(s.id).segments.length < 3)) this.selection = null;
     if (s.kind === 'segment' && !net.segments.has(s.id)) this.selection = null;
+    if (s.kind === 'roundabout' && !net.roundabouts.has(s.id)) this.selection = null;
+  }
+
+  /** Selects something (panels use this after turning a junction into a roundabout and back). */
+  select(p: Pick): void {
+    this.selection = p;
+    this.changed();
   }
 }

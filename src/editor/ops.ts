@@ -186,7 +186,7 @@ export function setTurns(net: RoadNetwork, segId: number, nodeId: number, lane: 
 }
 
 /** Changed roads plus the roads sharing their end nodes (their junction geometry changes too). */
-function touchedAround(net: RoadNetwork, ids: number[], extraNodes: number[] = []): number[] {
+export function touchedAround(net: RoadNetwork, ids: number[], extraNodes: number[] = []): number[] {
   const out = new Set(ids.filter((id) => net.segments.has(id)));
   const nodes = new Set(extraNodes.filter((n) => net.nodes.has(n)));
   for (const id of out) {

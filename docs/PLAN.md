@@ -201,6 +201,14 @@ _Last updated: 2026-11-20_
   - **Van model (2026-11-20):** vans (`TrafficSim.van`, about 10% of vehicles) have their own low-poly model: a tall cargo box behind a raked windscreen with a short bonnet, glazed only at the cab (shader kind 4). This adds 1 draw call.
   - **Turn arrows fix (2026-11-20):** arrows follow the lane's path (they used to run straight back from the stop line and drift off curved approaches). Short approaches between close junctions get the arrow nearer the stop line (it used to be skipped below 14 m; now only below 5.5 m). Flat road paint no longer gets the near-ground darkening, so arrows and stop lines stay crisp when zoomed out.
   - **No arrow = any direction (2026-11-20):** lanes that may take every turn their arm offers (`LaneGraph.armTurns`) get no arrow, e.g. single-lane streets. Arrows appear only on lanes limited to some directions, by default or by the turn-lane editor.
+  - **Roundabouts (2026-11-20):** any junction of 3+ roads can become a roundabout in the junction panel (`src/editor/roundabout.ts`).
+    - **Model:** a `Roundabout` record (centre, island radius, 1–3 lanes) owns a ring of one-way arc roads (`RoadSegment.ring`) along the island edge, lanes outside it, anticlockwise from above (right-hand traffic). Each road is cut where it reaches the island and joins the ring at a ring node; long gaps get plain joints (arcs ≤ 100°).
+    - **Lanes (`LaneGraph.connectRing`):** ring lanes continue lane for lane; exits leave from the outer ring lanes (kerb-aligned), so drivers on inner lanes move out first or go round again; entering lanes are spread over all ring lanes (kerb lane → outer). Any lane counts and one-way roads work.
+    - **Right of way:** the ring is always the main road at ring nodes (`JunctionModel.majorRoad`), so entering traffic gives way. Circulating traffic is exempt from the "don't block the junction" rule (a full ring would lock otherwise); entering traffic looks ahead along short ring pieces for room for a whole car (`exitBlocked` look-ahead, which applies to all junctions).
+    - **Size:** the island grows from a default (8 m + 3 m per extra lane) until every ring piece between entries keeps 5 m outside the junction areas. The panel changes lanes and size (rebuild in place) or turns it back into a priority, all-way or signal junction at the centre.
+    - **Editing around it:** new roads can join the ring anywhere (the ring is rebuilt evenly around entries after every edit, `tidyRoundabouts`); roads can't cross the island; Bend refuses ring roads; Remove on the ring removes the whole ring.
+    - **Merge zones** now start where paths come within 3.0 m (was 2.3 m): at long, shallow merges (a wide entry onto the ring) cars touched before the zone began.
+    - **Verified:** 4 layouts × 5 seeds × 15 min with 0 overlaps (checked every other step); city, priority and signal stress runs unchanged (priority worst wait improved 345 s → 180 s). Adds no draw calls.
 
 ### Next
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**
@@ -222,6 +230,7 @@ _Last updated: 2026-11-20_
   - Conflict zones were too short next to curved paths.
   - **Fixes:** the earliest arrival is used for "they're through before I arrive"; gaps are checked from before the commit point; zones are measured where the paths are closer than 2.8 m; and of two cars inside one zone, the one less far across stops.
   - **Result:** 0 overlaps (checked every other step) in the city, 16 priority-junction seeds, signals and close-together junctions. The price: about 2% less city throughput and about 15% less on close-together junctions, because drivers are more careful. Commits take about 30 ms on a laptop.
+- **Roundabout size:** entries need room between them (each road's junction area plus 5 m of ring), so roundabouts on wide roads are large (2 avenues + 2 streets: about 44 m across) and roads meeting at small angles need a big ring. Ring lanes have no lane arrows or spiral markings; the island is plain grass.
 - **Deadlock breaker:** when it fires, a stuck vehicle creeps through, which can cause a brief visual overlap. This is rare at nominal demand and more frequent when the network is oversaturated (1.5× demand: a few samples per 20 minutes).
 - **Signal timings:** green time defaults to 10 s + 8 s per lane and can be changed per phase in the editor. No actuation or protected left phases yet.
 - **Free-flow routing:** routes use free-flow time only, so vehicles don't avoid congestion. Dynamic rerouting is a candidate for Milestone 7/8.

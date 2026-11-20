@@ -48,6 +48,8 @@ export class LaneGraph {
    * (TURN_* bits), whether or not this lane is allowed to take it.
    */
   readonly armTurns = new Map<number, number>();
+  /** Connectors that carry roundabout traffic on around the ring. */
+  readonly circulating = new Set<number>();
 
   constructor(readonly net: RoadNetwork) {
     const incoming = new Map<number, Map<number, Lane[]>>(); // node → segment → lanes ending there
@@ -107,6 +109,10 @@ export class LaneGraph {
       }
       const junction = net.isJunction(node.id);
       const twoWay = node.segments.length === 2;
+      if (node.ring !== undefined && junction) {
+        this.connectRing(node.id, node.ring, ins, outs);
+        continue;
+      }
       for (const [inSeg, inLanes] of ins) {
         const exits = [...outs].filter(([seg]) => seg !== inSeg); // no U-turns
         const hasStraight = exits.some(([, ls]) => this.classify(inLanes[0]!, ls[0]!) === 'straight');
@@ -132,6 +138,40 @@ export class LaneGraph {
     };
     this.lanes.push(lane);
     return lane;
+  }
+
+  /**
+   * Where roads join a roundabout ring (lane index 0 = innermost, next to the island):
+   *  - ring lanes continue around the ring, lane for lane;
+   *  - exits are taken from the outer ring lanes, kerb-aligned (outer ring lane → kerb lane),
+   *    so drivers on inner lanes move out first or go round again;
+   *  - entering lanes are spread over all ring lanes, kerb lane → outer ring lane.
+   * Any lane counts work: lanes are spread so every lane on both sides gets a connection.
+   */
+  private connectRing(node: number, ring: number, ins: Map<number, Lane[]>, outs: Map<number, Lane[]>): void {
+    const net = this.net;
+    let ringIn: Lane[] = [], ringOut: Lane[] = [];
+    for (const [sid, ls] of ins) if (net.segment(sid).ring === ring) ringIn = ls;
+    for (const [sid, ls] of outs) if (net.segment(sid).ring === ring) ringOut = ls;
+    const outerFirst = (ls: Lane[]): Lane[] => [...ls].sort((a, b) => b.index - a.index);
+    const rin = outerFirst(ringIn), rout = outerFirst(ringOut);
+    const m = rout.length;
+    for (const l of ringIn) {
+      if (m === 0) continue;
+      this.link(node, l, ringOut.find((o) => o.index === Math.min(l.index, m - 1))!, true, 'straight');
+      this.circulating.add(l.next[l.next.length - 1]!);
+    }
+    for (const [sid, ls] of outs) {
+      if (net.segment(sid).ring === ring || rin.length === 0) continue;
+      spread(Math.min(rin.length, ls.length), ls.length, (i, j) => this.link(node, rin[i]!, outerFirst(ls)[j]!, true, 'right'));
+    }
+    for (const [sid, ls] of ins) {
+      if (net.segment(sid).ring === ring) continue;
+      for (const l of ls) this.armTurns.set(l.id, m > 0 ? TURN_RIGHT : 0);
+      if (m === 0) continue;
+      const entry = outerFirst(ls);
+      spread(entry.length, m, (i, j) => this.link(node, entry[i]!, rout[j]!, true, 'right'));
+    }
   }
 
   private classify(a: Lane, b: Lane): Turn {
@@ -216,5 +256,16 @@ export class LaneGraph {
     c.prev.push(a.id);
     c.next.push(b.id);
     b.prev.push(c.id);
+  }
+}
+
+/**
+ * Connects `a` lanes to `b` lanes in order (both counted from the same side) so that every lane
+ * on each side gets at least one partner: lane i takes the b-lanes its share of the width covers.
+ */
+function spread(a: number, b: number, link: (i: number, j: number) => void): void {
+  for (let i = 0; i < a; i++) {
+    const j0 = Math.floor((i * b) / a), j1 = Math.max(j0, Math.ceil(((i + 1) * b) / a) - 1);
+    for (let j = j0; j <= j1; j++) link(i, j);
   }
 }

@@ -80,7 +80,7 @@ export class JunctionProps {
         // limited to some directions: no arrow means every way the junction offers. They follow
         // the lane's path so they stay in the lane on curved approaches; short approaches (close
         // junctions) get the arrow nearer the stop line.
-        if (graph.net.node(nodeId).segments.length >= 3) {
+        if (graph.net.node(nodeId).segments.length >= 3 && graph.net.node(nodeId).ring === undefined) {
           for (const id of laneIds) {
             const l = graph.lanes[id]!;
             if (l.path.length < ARROW_MIN_LANE) continue;

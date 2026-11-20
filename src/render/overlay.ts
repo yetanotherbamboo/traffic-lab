@@ -77,7 +77,7 @@ export class OverlayBuilder {
   }
 
   ring(p: Vec3, r: number, c: Vec3, width = 0.45): void {
-    const n = 12;
+    const n = Math.max(12, Math.ceil(r * 1.5));
     for (let k = 0; k < n; k++) {
       const a0 = (k / n) * Math.PI * 2, a1 = ((k + 1) / n) * Math.PI * 2;
       this.strip([p[0] + Math.cos(a0) * r, 0, p[2] + Math.sin(a0) * r], [p[0] + Math.cos(a1) * r, 0, p[2] + Math.sin(a1) * r], width, c, Y + 0.02);

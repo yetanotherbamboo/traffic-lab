@@ -31,6 +31,21 @@ export interface RoadNode {
   major?: [number, number];
   /** Signal junctions: green time (s) per incoming segment id; a phase uses the max of its arms. */
   greens?: Record<number, number>;
+  /** Id of the roundabout this node lies on (where a road meets the ring, or a ring joint). */
+  ring?: number;
+}
+
+/**
+ * A roundabout: a ring of one-way roads (`RoadSegment.ring`) around an island, circulating
+ * anticlockwise seen from above (right-hand traffic: island on the driver's left). The ring roads'
+ * centrelines run along the island edge, their lanes lie outside it.
+ */
+export interface Roundabout {
+  id: number;
+  centre: Vec3;
+  /** Island radius (m): distance from the centre to the inner edge of the ring's asphalt. */
+  radius: number;
+  lanes: number;
 }
 
 export interface RoadSegment {
@@ -45,15 +60,18 @@ export interface RoadSegment {
    */
   turnsA?: number[];
   turnsB?: number[];
+  /** Id of the roundabout whose ring this road is part of. */
+  ring?: number;
 }
 
 /** Plain-data form of a network (levels, undo snapshots). */
 export interface NetworkData {
   nextId: number;
-  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number> }[];
+  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number>; ring?: number }[];
   segments: {
-    id: number; a: number; b: number; c1: Vec3; c2: Vec3; profile: LaneProfile; turnsA?: number[]; turnsB?: number[];
+    id: number; a: number; b: number; c1: Vec3; c2: Vec3; profile: LaneProfile; turnsA?: number[]; turnsB?: number[]; ring?: number;
   }[];
+  roundabouts?: Roundabout[];
 }
 
 /** One road leaving a node, described in an outward-facing frame. */
@@ -83,7 +101,13 @@ export const rightOf = (d: Vec3): Vec3 => [-d[2], 0, d[0]];
 export class RoadNetwork {
   readonly nodes = new Map<number, RoadNode>();
   readonly segments = new Map<number, RoadSegment>();
+  readonly roundabouts = new Map<number, Roundabout>();
   private nextId = 1;
+
+  /** A fresh id (shared counter with nodes and segments). */
+  newId(): number {
+    return this.nextId++;
+  }
 
   addNode(pos: Vec3): number {
     const id = this.nextId++;
@@ -133,6 +157,25 @@ export class RoadNetwork {
     }
   }
 
+  /**
+   * Moves the end of road `segId` that is at node `from` to node `to`. The road keeps its far end
+   * and passes through the old end point: (far, far control, old end, new end).
+   */
+  moveEnd(segId: number, from: number, to: number): void {
+    const seg = this.segment(segId);
+    const old = this.node(from), nw = this.node(to);
+    const atA = seg.a === from;
+    const c = seg.curve;
+    seg.curve = atA ? new CubicBezier(nw.pos, old.pos, c.p2, c.p3) : new CubicBezier(c.p0, c.p1, old.pos, nw.pos);
+    if (atA) seg.a = to;
+    else seg.b = to;
+    old.segments = old.segments.filter((s) => s !== segId);
+    if (old.major?.includes(segId)) delete old.major;
+    if (old.greens) delete old.greens[segId];
+    nw.segments.push(segId);
+    if (old.segments.length === 0) this.nodes.delete(from);
+  }
+
   /** Replaces the shape of a road, keeping its end nodes. */
   setCurve(id: number, c1: Vec3, c2: Vec3): void {
     const seg = this.segment(id);
@@ -154,6 +197,14 @@ export class RoadNetwork {
     const second = this.addSegment(mid, seg.b, seg.profile, vec3.add(c1.p1, off), c1.p2);
     if (seg.turnsA) this.segment(first).turnsA = [...seg.turnsA];
     if (seg.turnsB) this.segment(second).turnsB = [...seg.turnsB];
+    if (seg.ring !== undefined) {
+      // A new point on a roundabout ring: the ring has right of way there.
+      this.segment(first).ring = seg.ring;
+      this.segment(second).ring = seg.ring;
+      const n = this.node(mid);
+      n.ring = seg.ring;
+      n.major = [first, second];
+    }
     const rename = (nodeId: number, to: number): void => {
       const n = this.node(nodeId);
       n.segments = n.segments.filter((s) => s !== id && s !== to);
@@ -178,12 +229,17 @@ export class RoadNetwork {
         ...(n.control ? { control: n.control } : {}),
         ...(n.major ? { major: [...n.major] as [number, number] } : {}),
         ...(n.greens ? { greens: { ...n.greens } } : {}),
+        ...(n.ring !== undefined ? { ring: n.ring } : {}),
       })),
       segments: [...this.segments.values()].map((s) => ({
         id: s.id, a: s.a, b: s.b, c1: [...s.curve.p1] as Vec3, c2: [...s.curve.p2] as Vec3, profile: { ...s.profile },
         ...(s.turnsA ? { turnsA: [...s.turnsA] } : {}),
         ...(s.turnsB ? { turnsB: [...s.turnsB] } : {}),
+        ...(s.ring !== undefined ? { ring: s.ring } : {}),
       })),
+      ...(this.roundabouts.size > 0
+        ? { roundabouts: [...this.roundabouts.values()].map((r) => ({ ...r, centre: [...r.centre] as Vec3 })) }
+        : {}),
     };
   }
 
@@ -194,6 +250,7 @@ export class RoadNetwork {
       if (n.control) node.control = n.control;
       if (n.major) node.major = [...n.major];
       if (n.greens) node.greens = { ...n.greens };
+      if (n.ring !== undefined) node.ring = n.ring;
       net.nodes.set(n.id, node);
     }
     for (const s of d.segments) {
@@ -204,10 +261,12 @@ export class RoadNetwork {
       };
       if (s.turnsA) seg.turnsA = [...s.turnsA];
       if (s.turnsB) seg.turnsB = [...s.turnsB];
+      if (s.ring !== undefined) seg.ring = s.ring;
       net.segments.set(s.id, seg);
       na.segments.push(s.id);
       nb.segments.push(s.id);
     }
+    for (const r of d.roundabouts ?? []) net.roundabouts.set(r.id, { ...r, centre: [...r.centre] as Vec3 });
     net.nextId = d.nextId;
     return net;
   }

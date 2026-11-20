@@ -1,5 +1,6 @@
 import type { Vec3 } from '../core/math';
 import type { Editor, Marker } from '../editor/editor';
+import { outerRadius } from '../editor/roundabout';
 import { segmentEditable } from '../editor/rules';
 import type { World } from '../game/world';
 import type { OverlayBuilder } from '../render/overlay';
@@ -36,12 +37,16 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
   // Bend tool: grab handles in the middle of every editable road.
   if (ed.tool === 'bend' && !d) {
     for (const seg of w.net.segments.values()) {
-      if (segmentEditable(w.net, w.zone, seg)) ob.dot(seg.curve.point(0.5), 1.4, OVERLAY.segment);
+      if (seg.ring === undefined && segmentEditable(w.net, w.zone, seg)) ob.dot(seg.curve.point(0.5), 1.4, OVERLAY.segment);
     }
   }
 
   const sel = ed.selection;
-  if (sel?.kind === 'segment' && w.net.segments.has(sel.id)) {
+  if (sel?.kind === 'roundabout' && w.net.roundabouts.has(sel.id)) {
+    const r = w.net.roundabouts.get(sel.id)!;
+    ob.ring(r.centre, outerRadius(r) + 1.5, OVERLAY.select, 0.5);
+    ob.ring(r.centre, Math.max(1, r.radius - 1), OVERLAY.select, 0.5);
+  } else if (sel?.kind === 'segment' && w.net.segments.has(sel.id)) {
     const seg = w.net.segment(sel.id);
     const { forward: f, backward: b, laneWidth: lw } = seg.profile;
     const [s0, s1] = w.net.trimmedRange(seg);

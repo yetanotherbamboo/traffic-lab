@@ -193,8 +193,16 @@ function addJunction(b: Builder, net: RoadNetwork, nodeId: number): void {
     ring.push(vec3.sub(a.end, vec3.scale(a.right, a.leftExt)));
     ring.push(...cornerCurve(a, next, centre));
   });
+  // Fan from the node, except on a roundabout ring: there the node lies on the island edge, so
+  // fan from the middle of the surface instead.
+  let hub = centre;
+  if (net.node(nodeId).ring !== undefined) {
+    let x = 0, z = 0;
+    for (const p of ring) { x += p[0]; z += p[2]; }
+    hub = [x / ring.length, centre[1], z / ring.length];
+  }
   const c0 = b.vertexCount();
-  b.push(vec3.add(centre, [0, LIFT, 0]), up, 0, 0, none, MAT_ASPHALT);
+  b.push(vec3.add(hub, [0, LIFT, 0]), up, 0, 0, none, MAT_ASPHALT);
   for (const p of ring) b.push(vec3.add(p, [0, LIFT, 0]), up, 0, 0, none, MAT_ASPHALT);
   for (let k = 0; k < ring.length; k++) {
     b.i.push(c0, c0 + 1 + ((k + 1) % ring.length), c0 + 1 + k);

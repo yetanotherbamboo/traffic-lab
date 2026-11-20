@@ -6,7 +6,7 @@ import type { Path } from './path';
 /** Paths closer than this (m, centreline to centreline) are treated as conflicting. */
 const CONFLICT_DIST = 1.9;
 const MERGE_ZONE = 3.5;
-const MERGE_DIST = 2.3; // merging paths closer than this share the zone
+const MERGE_DIST = 3.0; // merging paths closer than this share the zone (two car widths at an angle)
 const YELLOW = 3;
 const ALL_RED = 2;
 
@@ -233,7 +233,10 @@ export class JunctionModel {
 
   /** The two arms with the highest capacity (preferring a straight-through pair) form the main road. */
   private majorRoad(nodeId: number): Set<number> {
-    const chosen = this.graph.net.node(nodeId).major;
+    const node = this.graph.net.node(nodeId);
+    // On a roundabout the ring always has right of way, wherever roads join it.
+    if (node.ring !== undefined) return new Set(node.segments.filter((s) => this.graph.net.segment(s).ring === node.ring));
+    const chosen = node.major;
     if (chosen && chosen.every((s) => this.graph.net.node(nodeId).segments.includes(s))) return new Set(chosen);
     const arms = this.graph.net.arms(nodeId);
     const rank = (i: number): number => {

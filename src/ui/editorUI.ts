@@ -1,6 +1,9 @@
 import { formatMoney } from '../editor/cost';
 import { type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
 import { MAX_LANES, setControl, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
+import {
+  RING_MAX_LANES, RING_MIN_LANES, convertToRoundabout, outerRadius, removeRoundabout, setRoundaboutLanes, setRoundaboutSize,
+} from '../editor/roundabout';
 import type { World } from '../game/world';
 import { type JunctionControl, TURN_LEFT, TURN_RIGHT, TURN_STRAIGHT } from '../network/network';
 import { TURN_BIT } from '../sim/laneGraph';
@@ -22,7 +25,7 @@ const HINTS: Record<Tool, string> = {
   view: 'Drag to move · pinch or two fingers to zoom and turn',
   road: 'Drag from a point to another to build a road · two fingers move the view',
   bend: 'Drag the middle of a road to bend it',
-  select: 'Tap a road or junction to change it',
+  select: 'Tap a road, junction or roundabout to change it',
   delete: 'Tap a road to remove it',
 };
 
@@ -155,6 +158,8 @@ export class EditorUI {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {
       body.push(...this.junctionPanel(sel.id));
+    } else if (ed.tool === 'select' && sel?.kind === 'roundabout' && this.world.net.roundabouts.has(sel.id)) {
+      body.push(...this.roundaboutPanel(sel.id));
     }
     this.panel.replaceChildren(...body.filter((c): c is Node | string => !!c));
     this.panel.hidden = body.length === 0;
@@ -180,6 +185,46 @@ export class EditorUI {
     ];
   }
 
+  /** Turns a junction into a roundabout and selects it. */
+  private toRoundabout(nodeId: number): void {
+    const centre = this.world.net.node(nodeId).pos;
+    if (this.editor.apply((n) => convertToRoundabout(n, nodeId)) !== null) return;
+    const r = [...this.world.net.roundabouts.values()].find((x) => x.centre[0] === centre[0] && x.centre[2] === centre[2]);
+    if (r) this.editor.select({ kind: 'roundabout', id: r.id, pos: r.centre });
+  }
+
+  private roundaboutPanel(id: number): Child[] {
+    const net = this.world.net;
+    const r = net.roundabouts.get(id)!;
+    const entries = [...net.nodes.values()].filter((n) => n.ring === id && n.segments.length > 2).length;
+    const back = (c: JunctionControl): void => {
+      let centre = -1;
+      const err = this.editor.apply((n) => {
+        const res = removeRoundabout(n, id);
+        if (n.nodes.has(res.node)) setControl(n, res.node, c);
+        centre = res.node;
+        return res;
+      });
+      if (err === null && this.world.net.nodes.has(centre) && this.world.net.node(centre).segments.length >= 3) {
+        this.editor.select({ kind: 'node', id: centre, pos: this.world.net.node(centre).pos });
+      }
+    };
+    const diameter = Math.round(outerRadius(r) * 2);
+    return [
+      h('h3', {}, `Roundabout · ${entries} ${entries === 1 ? 'road' : 'roads'} · ${diameter} m across`),
+      h('div', { class: 'row' }, ...CONTROLS.map(([c, label]) => chip(label, false, () => back(c))), chip('Roundabout', true, () => {})),
+      h('div', { class: 'row' }, h('span', { class: 'label' }, 'Lanes'),
+        chip('−', false, () => r.lanes > RING_MIN_LANES && this.act((n) => setRoundaboutLanes(n, id, r.lanes - 1))),
+        h('span', { class: 'num' }, String(r.lanes)),
+        chip('+', false, () => r.lanes < RING_MAX_LANES && this.act((n) => setRoundaboutLanes(n, id, r.lanes + 1)))),
+      h('div', { class: 'row' }, h('span', { class: 'label' }, 'Size'),
+        chip('−', false, () => this.act((n) => setRoundaboutSize(n, id, r.radius - 2))),
+        h('span', { class: 'num' }, `${diameter} m`),
+        chip('+', false, () => this.act((n) => setRoundaboutSize(n, id, r.radius + 2)))),
+      h('div', { class: 'row' }, h('span', { class: 'label' }, 'Traffic on the ring has right of way; new roads can join it anywhere')),
+    ];
+  }
+
   private junctionPanel(nodeId: number): Child[] {
     const w = this.world, net = w.net;
     const node = net.node(nodeId);
@@ -188,7 +233,8 @@ export class EditorUI {
     const colorOf = (segId: number): string => APPROACH_HEX[arms.findIndex((a) => a.segment.id === segId) % APPROACH_HEX.length]!;
     const out: Child[] = [
       h('h3', {}, `Junction · ${arms.length} roads`),
-      h('div', { class: 'row' }, ...CONTROLS.map(([c, label]) => chip(label, control === c, () => this.act((n) => setControl(n, nodeId, c))))),
+      h('div', { class: 'row' }, ...CONTROLS.map(([c, label]) => chip(label, control === c, () => this.act((n) => setControl(n, nodeId, c)))),
+        chip('Roundabout', false, () => this.toRoundabout(nodeId))),
     ];
 
     if (control === 'priority') {

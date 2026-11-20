@@ -507,19 +507,39 @@ export class TrafficSim {
     return true;
   }
 
-  /** Don't enter the junction unless there is room on the exit lane (no blocking the box). */
+  /**
+   * Don't enter the junction unless there is room on the exit lane (no blocking the box). Short
+   * exit lanes (e.g. between the entries of a roundabout) are followed on along the way ahead
+   * until there is room for a whole vehicle, so nobody stops with its tail in the junction.
+   */
   private exitBlocked(i: number, C: Lane): boolean {
     const lanes = this.graph.lanes;
+    const need = this.length[i]! + 2.5;
     const out = C.next[0]!;
-    const list = this.laneVehicles[out]!;
-    if (list.length === 0) return false;
-    const last = list[list.length - 1]!;
-    let space = this.s[last]! - this.length[last]!;
-    if (space > 60 || this.v[last]! > 3) return false;
+    let space = 0;
+    let lane = out;
+    for (let hop = 0; hop < 4; hop++) {
+      const list = this.laneVehicles[lane]!;
+      if (list.length > 0) {
+        const last = list[list.length - 1]!;
+        const room = space + this.s[last]! - this.length[last]!;
+        if (room > 60 || this.v[last]! > 3) return false;
+        space = room;
+        break;
+      }
+      space += lanes[lane]!.path.length;
+      if (space >= need) break;
+      // Continue along the way ahead: the straight-on (or only) successor of this lane.
+      const L = lanes[lane]!;
+      let nx = -1;
+      for (const k of L.next) if (nx < 0 || lanes[k]!.turn === 'straight') nx = k;
+      if (nx < 0) return false;
+      lane = nx;
+    }
     for (const p of lanes[out]!.prev) {
       for (const j of this.laneVehicles[p]!) if (j !== i) space -= this.length[j]! + 2;
     }
-    return space < this.length[i]! + 2.5;
+    return space < need;
   }
 
   private mustStop(i: number, C: Lane, d: number): boolean {
@@ -554,6 +574,9 @@ export class TrafficSim {
     if (d < gapRange) {
       for (const c of this.junctions.conflicts[C.id]!) if (!c.yields && !this.insidersClear(i, C, d, c)) return true;
     }
+    // Traffic circulating on a roundabout just follows the car ahead (holding back for room ahead
+    // would lock a full ring); entering traffic must not block the ring.
+    if (this.graph.circulating.has(C.id)) return false;
     return this.exitBlocked(i, C);
   }
 

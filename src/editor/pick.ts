@@ -5,6 +5,7 @@ import { halfWidth, sampleCurve } from './rules';
 export type Pick =
   | { kind: 'node'; id: number; pos: Vec3 }
   | { kind: 'segment'; id: number; t: number; pos: Vec3; dist: number }
+  | { kind: 'roundabout'; id: number; pos: Vec3 }
   | null;
 
 /** Closest point on a road's centreline to (x, z): curve parameter, point and distance. */

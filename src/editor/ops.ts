@@ -4,7 +4,7 @@ import { roadCost } from './cost';
 import { nearestOnSegment } from './pick';
 import { sampleCurve } from './rules';
 import type { Anchor } from './snap';
-import { MAX_ARMS, MIN_ROAD } from './validate';
+import { MAX_ARMS, tooShort } from './validate';
 
 /**
  * Editing operations on a road network. Each mutates the network it is given (the editor runs
@@ -105,8 +105,8 @@ export const TOO_CLOSE = 'Too close to a junction: start the road further away f
 /**
  * Can a new road of `profile` attach at this anchor at all, whatever direction it is drawn in?
  * On a road, a new junction there is tried with a perpendicular road (the angle that needs the
- * least room): if even that leaves a piece of the old road shorter than MIN_ROAD between the
- * junction areas, no road can join here. Returns the reason, or null.
+ * least room): if even that leaves a piece of the old road too short (`tooShort`), no road can
+ * join here. Returns the reason, or null.
  */
 export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile): string | null {
   if (a.kind === 'node') {
@@ -120,10 +120,7 @@ export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile)
   const { node, first, second } = trial.splitSegment(a.id, a.t);
   const p = trial.node(node).pos;
   trial.addSegment(node, trial.addNode([p[0] + r[0] * 30, 0, p[2] + r[2] * 30]), profile);
-  for (const id of [first, second]) {
-    const [s0, s1] = trial.trimmedRange(trial.segment(id));
-    if (s1 - s0 < MIN_ROAD) return TOO_CLOSE;
-  }
+  for (const id of [first, second]) if (tooShort(trial, trial.segment(id))) return TOO_CLOSE;
   return null;
 }
 

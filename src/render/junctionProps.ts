@@ -17,6 +17,11 @@ const SIDEWALK_Y = 0.18;
 const ARROW_BACK = 8;
 /** Approaches shorter than this get no arrow (it is 3.6 m long and must clear the stop line). */
 const ARROW_MIN_LANE = 5.5;
+/** Arrow paint: stroke width, sideways reach of turn branches, head stroke length and angle. */
+const ARROW_STROKE = 0.26;
+const ARROW_SPREAD = 0.7;
+const ARROW_HEAD = 0.62;
+const ARROW_HEAD_ANGLE = 0.55;
 const scratch = new Float32Array(4);
 const ROAD_Y = 0.03;
 
@@ -114,22 +119,22 @@ export class JunctionProps {
               const dx = tip[0] - from[0], dz = tip[2] - from[2], len = Math.hypot(dx, dz) || 1;
               const ux = dx / len, uz = dz / len;
               for (const sgn of [1, -1]) {
-                const c = Math.cos(0.6), sn = Math.sin(0.6) * sgn;
+                const c = Math.cos(ARROW_HEAD_ANGLE), sn = Math.sin(ARROW_HEAD_ANGLE) * sgn;
                 const bx = -(ux * c - uz * sn), bz = -(uz * c + ux * sn); // rotated back-pointing
-                seg(tip, [tip[0] + bx * 0.75, 0, tip[2] + bz * 0.75], 0.16);
+                seg(tip, [tip[0] + bx * ARROW_HEAD, 0, tip[2] + bz * ARROW_HEAD], ARROW_STROKE);
               }
             };
             const base = at(0, 0), fork = at(1.8, 0);
-            seg(base, fork, 0.18);
+            seg(base, fork, ARROW_STROKE);
             if (turns.has('straight')) {
               const tip = at(3.6, 0);
-              seg(fork, tip, 0.18);
+              seg(fork, tip, ARROW_STROKE);
               head(tip, fork);
             }
             for (const [t, u] of [['left', -1], ['right', 1]] as const) {
               if (!turns.has(t)) continue;
-              const tip = at(2.9, u * 1.0);
-              seg(fork, tip, 0.18);
+              const tip = at(2.9, u * ARROW_SPREAD);
+              seg(fork, tip, ARROW_STROKE);
               head(tip, fork);
             }
           }

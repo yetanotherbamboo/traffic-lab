@@ -54,6 +54,8 @@ export interface Draft {
 }
 
 const HISTORY_LIMIT = 100;
+/** How far along a road a blocked point may move onto a plain joint (m). See `Editor.settle`. */
+const JOINT_SNAP = 20;
 
 /**
  * Touch-first road editor. DOM-free: it receives ground points (and a pick tolerance in metres
@@ -125,7 +127,7 @@ export class Editor {
   down(p: Vec3, tol: number): boolean {
     this.message = null;
     if (this.tool === 'road') {
-      const snap = snapPoint(this.net, this.host.zone, p, tol);
+      const snap = { anchor: this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor) };
       const problem = this.startProblem(snap.anchor);
       if (problem) {
         // Nothing gets built from here: keep the red cross under the finger until it lifts.
@@ -163,7 +165,7 @@ export class Editor {
 
   move(p: Vec3, tol: number): void {
     if (this.tool === 'road' && this.start) {
-      const end = snapPoint(this.net, this.host.zone, p, tol, this.start).anchor;
+      const end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start).anchor);
       const markers: Marker[] = [{ pos: this.start.pos, kind: this.start.kind }, { pos: end.pos, kind: end.kind }];
       const err = this.outside(this.start) ?? this.outside(end);
       const preset = ROAD_PRESETS[this.preset]!;
@@ -207,7 +209,7 @@ export class Editor {
       }
       return;
     }
-    const a = snapPoint(this.net, this.host.zone, p, tol).anchor;
+    const a = this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor);
     this.hover = { pos: a.pos, kind: this.startProblem(a) ? 'blocked' : a.kind };
     this.changed();
   }
@@ -219,7 +221,7 @@ export class Editor {
    */
   private tapRoad(p: Vec3, tol: number): void {
     if (!this.start) {
-      const a = snapPoint(this.net, this.host.zone, p, tol).anchor;
+      const a = this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor);
       const problem = this.outside(a) ?? this.startProblem(a);
       if (problem) {
         this.message = problem;
@@ -250,19 +252,46 @@ export class Editor {
     }
   }
 
-  private problemCache = { net: null as RoadNetwork | null, key: '', result: null as string | null };
+  private problemNet: RoadNetwork | null = null;
+  private readonly problems = new Map<string, string | null>();
 
-  /** Why a road can't start at this anchor (cached: hover asks on every mouse move). */
+  /** Why a road can't start at this anchor (cached per network: hover asks on every mouse move). */
   private startProblem(a: Anchor): string | null {
     if (a.kind !== 'segment' && a.kind !== 'node') return null;
-    const c = this.problemCache, net = this.net;
-    const key = `${a.kind}:${a.id}:${a.kind === 'segment' ? a.t.toFixed(3) : ''}:${this.preset}`;
-    if (c.net !== net || c.key !== key) {
-      c.net = net;
-      c.key = key;
-      c.result = anchorProblem(net, a, ROAD_PRESETS[this.preset]!.profile);
+    const net = this.net;
+    if (this.problemNet !== net) {
+      this.problemNet = net;
+      this.problems.clear();
     }
-    return c.result;
+    const key = `${a.kind}:${a.id}:${a.kind === 'segment' ? a.t.toFixed(3) : ''}:${this.preset}`;
+    let r = this.problems.get(key);
+    if (r === undefined) {
+      if (this.problems.size > 500) this.problems.clear();
+      r = anchorProblem(net, a, ROAD_PRESETS[this.preset]!.profile);
+      this.problems.set(key, r);
+    }
+    return r;
+  }
+
+  /**
+   * A point on a road too close to a plain joint for a junction to fit before it (e.g. where a
+   * road is cut at the construction-zone border) moves onto the joint: the junction is built
+   * there instead. Other anchors are returned as they are.
+   */
+  private settle(a: Anchor): Anchor {
+    if (a.kind !== 'segment' || this.startProblem(a) === null) return a;
+    const net = this.net, seg = net.segment(a.id);
+    const s = seg.curve.length * a.t;
+    let best: Anchor = a, bestD = JOINT_SNAP;
+    for (const [end, d] of [[seg.a, s], [seg.b, seg.curve.length - s]] as const) {
+      const n = net.node(end);
+      if (d >= bestD || n.segments.length !== 2 || net.isJunction(end) || !nodeConnectable(net, this.host.zone, end)) continue;
+      const cand: Anchor = { kind: 'node', id: end, pos: n.pos };
+      if (this.startProblem(cand) !== null) continue;
+      best = cand;
+      bestD = d;
+    }
+    return best;
   }
 
   /** Tap with a tap tool: select or delete, or place a road's start / end in tap mode. */

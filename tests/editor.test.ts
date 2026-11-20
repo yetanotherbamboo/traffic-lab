@@ -341,12 +341,12 @@ describe('turn arrows', () => {
     expect(props.arrowLanes).toBe(limited.filter((l) => l.path.length >= 5.5).length);
     expect(limited.some((l) => l.path.length >= 5.5 && l.path.length < 14)).toBe(true); // close junctions covered
 
-    // Arrow stems (0.18 m wide, 1.8 m long: the base and the straight-ahead part) sit on a lane's
+    // Arrow stems (0.26 m wide, 1.8 m long: the base and the straight-ahead part) sit on a lane's
     // centre line, also on the curved approaches.
     const b = props.buffer;
     let stems = 0;
     for (let o = 0; o < b.length; o += LIT_STRIDE) {
-      if (Math.abs(b[o + 1]! - 0.03) > 1e-4 || Math.abs(b[o + 6]! - 0.18) > 1e-4 || Math.abs(b[o + 4]! - 1.89) > 0.05) continue;
+      if (Math.abs(b[o + 1]! - 0.03) > 1e-4 || Math.abs(b[o + 6]! - 0.26) > 1e-4 || Math.abs(b[o + 4]! - 1.93) > 0.05) continue;
       const dist = Math.min(...approaches.map((l) => l.path.project(b[o]!, b[o + 2]!).dist));
       expect(dist).toBeLessThan(0.15);
       stems++;
@@ -413,6 +413,25 @@ describe('starting a road near a junction', () => {
       return ed.hover!.kind;
     });
     expect(streetKinds.indexOf('segment')).toBeLessThanOrEqual(firstOk);
+  });
+});
+
+describe('starting a road near the construction-zone border', () => {
+  it('the cut at the border is no junction: roads start next to it (or on it)', () => {
+    for (let x = 52; x <= 69; x += 1) {
+      const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+      const ed = new Editor(w);
+      ed.setTool('road');
+      ed.hoverAt([x, 0, 0], 1.5);
+      expect(ed.hover!.kind, `x=${x}`).not.toBe('blocked');
+      const before = w.net.segments.size;
+      ed.down([x, 0, 0], 1.5);
+      ed.move([x - 8, 0, 30], 1.5);
+      expect(ed.draft?.error ?? null, `x=${x}`).toBeNull();
+      ed.up();
+      expect(w.net.segments.size, `x=${x}: built`).toBeGreaterThan(before);
+      expect(validate(w.net, TEST_ZONE, [...w.net.segments.keys()].filter((id) => segmentEditable(w.net, TEST_ZONE, w.net.segment(id))))).toBeNull();
+    }
   });
 });
 

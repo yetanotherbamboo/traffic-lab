@@ -1,6 +1,6 @@
 import { type Zone, zoneDistance } from '../env/zone';
 import type { CubicBezier } from '../network/bezier';
-import type { RoadNetwork } from '../network/network';
+import type { RoadNetwork, RoadSegment } from '../network/network';
 import { BOUNDARY_TOL, halfWidth, sampleCurve } from './rules';
 
 /** Shortest ring road between neighbouring entries (duplicated from roundabout.ts to avoid a cycle). */
@@ -8,6 +8,36 @@ const MIN_RING_ARC = 5;
 
 /** Shortest drivable stretch of road between two junctions (m). */
 export const MIN_ROAD = 6;
+/** Junction areas must fit on a road piece with at least this much road left between them (m). */
+const MIN_PIECE = 1;
+
+/**
+ * Is this road too short? Plain joints (two roads continuing straight on, like the cuts at the
+ * construction-zone border) are not junctions: the drivable stretch continues through them, so
+ * MIN_ROAD counts the whole stretch between real junctions. The piece itself only has to hold
+ * the junction areas at its ends.
+ */
+export function tooShort(net: RoadNetwork, seg: RoadSegment): boolean {
+  const [s0, s1] = net.trimmedRange(seg);
+  if (s1 - s0 < MIN_PIECE) return true;
+  let len = s1 - s0;
+  for (const start of [seg.a, seg.b]) {
+    let node = start, from = seg.id;
+    for (let hop = 0; hop < 8 && len < MIN_ROAD; hop++) {
+      const n = net.node(node);
+      if (n.segments.length !== 2 || net.isJunction(node)) break;
+      const nextId = n.segments[0] === from ? n.segments[1]! : n.segments[0]!;
+      if (nextId === seg.id) break; // a loop of joints
+      const next = net.segment(nextId);
+      const [t0, t1] = net.trimmedRange(next);
+      len += t1 - t0;
+      from = nextId;
+      node = net.otherEnd(next, node);
+    }
+  }
+  return len < MIN_ROAD;
+}
+
 /** Smallest angle between neighbouring roads at a junction. */
 export const MIN_ANGLE = (25 * Math.PI) / 180;
 export const MAX_ARMS = 6;
@@ -51,7 +81,7 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
     if (seg.ring !== undefined) {
       // Ring roads are tight by design (lanes lie outside the island edge they follow).
       if (s1 - s0 < MIN_RING_ARC) return 'Roundabout is too small for these roads: make it bigger';
-    } else if (s1 - s0 < MIN_ROAD) {
+    } else if (tooShort(net, seg)) {
       return 'Too short: junctions are too close together';
     }
 

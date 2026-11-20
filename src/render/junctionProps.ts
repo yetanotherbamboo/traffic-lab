@@ -11,6 +11,11 @@ const POLE: Vec3 = [0.3, 0.32, 0.36];
 const STOP_SIGN: Vec3 = [0.84, 0.27, 0.24];
 const LAMP: Record<number, Vec3> = { 0: [0.35, 0.92, 0.55], 1: [1.0, 0.76, 0.3], 2: [0.98, 0.32, 0.28] };
 const SIDEWALK_Y = 0.18;
+/** Turn arrows start this far (m) before the stop line, or nearer on short approaches. */
+const ARROW_BACK = 8;
+/** Approaches shorter than this get no arrow (it is 3.6 m long and must clear the stop line). */
+const ARROW_MIN_LANE = 5.5;
+const scratch = new Float32Array(4);
 const ROAD_Y = 0.03;
 
 /** Height of the lit lamp's box above the signal head's base (red top, green bottom). */
@@ -33,6 +38,8 @@ export class JunctionProps {
   private readonly fixed: Float32Array;
   private readonly lamps: Lamp[] = [];
   readonly buffer: Float32Array;
+  /** Approach lanes that got turn arrows (for tests). */
+  arrowLanes = 0;
 
   constructor(sim: TrafficSim) {
     const { junctions, graph } = sim;
@@ -68,14 +75,22 @@ export class JunctionProps {
             }
           }
         }
-        // Turn arrows painted on every approach lane of a real junction (3+ roads).
+        // Turn arrows painted on every approach lane of a real junction (3+ roads), following the
+        // lane's own path so they stay in the lane on curved approaches. Short approaches (close
+        // junctions) get the arrow nearer the stop line.
         if (graph.net.node(nodeId).segments.length >= 3) {
           for (const id of laneIds) {
             const l = graph.lanes[id]!;
-            if (l.path.length < 14) continue;
+            if (l.path.length < ARROW_MIN_LANE) continue;
+            this.arrowLanes++;
             const turns = new Set(l.next.map((n) => graph.lanes[n]!.turn ?? 'straight'));
-            const end = l.path.point(l.path.count - 1), dir = l.path.dirAt(true), r = rightOf(dir);
-            const at = (f: number, u: number): Vec3 => [end[0] - dir[0] * (8 - f) + r[0] * u, ROAD_Y, end[2] - dir[2] * (8 - f) + r[2] * u];
+            const D = Math.min(ARROW_BACK, l.path.length - 0.3);
+            // Point `f` metres along the arrow (from its base) and `u` metres right of the lane centre.
+            const at = (f: number, u: number): Vec3 => {
+              l.path.sample(l.path.length - D + f, scratch);
+              const h = scratch[3]!, rx = Math.sin(h), rz = Math.cos(h); // right of (cos h, -sin h)
+              return [scratch[0]! + rx * u, ROAD_Y, scratch[2]! + rz * u];
+            };
             const seg = (a: Vec3, b: Vec3, w: number): void => {
               const dx = b[0] - a[0], dz = b[2] - a[2];
               box([(a[0] + b[0]) / 2, ROAD_Y, (a[2] + b[2]) / 2], Math.atan2(-dz, dx), [Math.hypot(dx, dz) + w * 0.5, 0.02, w], PAINT);

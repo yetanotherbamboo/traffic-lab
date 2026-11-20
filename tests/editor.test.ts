@@ -9,6 +9,8 @@ import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
 import { World } from '../src/game/world';
+import { LIT_STRIDE } from '../src/env/city';
+import { JunctionProps } from '../src/render/junctionProps';
 import { type LaneProfile, RoadNetwork, TURN_LEFT, rightOf } from '../src/network/network';
 import { ROAD_STRIDE } from '../src/render/roadMesh';
 import { buildRoadMesh } from '../src/render/roadMesh';
@@ -313,5 +315,39 @@ describe('live editing', () => {
     expect(ed.canUndo).toBe(true);
     ed.undo();
     expect(w.net.segments.size).toBe(n0);
+  });
+});
+
+describe('turn arrows', () => {
+  it('are painted on every approach lane, inside the lane, also near close junctions and on bends', () => {
+    const net = zoned();
+    addRoad(net, free(-35, -40), free(-35, 40), STREET);
+    // A second street close to the arterial: the approaches between them are short.
+    addRoad(net, free(-55, -18), free(-15, -18), STREET);
+    // A third street makes the north piece a road between two junctions; bending it curves both approaches.
+    addRoad(net, free(-55, 30), free(-15, 30), STREET);
+    const crossing = [...net.nodes.values()].find((n) => Math.abs(n.pos[0] + 35) < 0.01 && Math.abs(n.pos[2]) < 0.01)!;
+    const north = net.arms(crossing.id).find((a) => a.dir[2] > 0.9)!.segment;
+    bendRoad(net, north.id, [-20, 0, 20]);
+
+    const sim = new TrafficSim(new LaneGraph(net), [], 1);
+    const props = new JunctionProps(sim);
+    const lanes = sim.graph.lanes;
+    const approaches = lanes.filter((l) => l.kind === 'road' && lanes[l.next[0] ?? -1]?.kind === 'connector' && net.node(lanes[l.next[0]!]!.node).segments.length >= 3);
+    // Lanes squeezed to (almost) nothing between two junctions have no room for paint.
+    expect(props.arrowLanes).toBe(approaches.filter((l) => l.path.length >= 5.5).length);
+    expect(approaches.some((l) => l.path.length < 14)).toBe(true); // the close-junction case is covered
+
+    // Arrow stems (0.18 m wide, 1.8 m long: the base and the straight-ahead part) sit on a lane's
+    // centre line, also on the curved approaches.
+    const b = props.buffer;
+    let stems = 0;
+    for (let o = 0; o < b.length; o += LIT_STRIDE) {
+      if (Math.abs(b[o + 1]! - 0.03) > 1e-4 || Math.abs(b[o + 6]! - 0.18) > 1e-4 || Math.abs(b[o + 4]! - 1.89) > 0.05) continue;
+      const dist = Math.min(...approaches.map((l) => l.path.project(b[o]!, b[o + 2]!).dist));
+      expect(dist).toBeLessThan(0.15);
+      stems++;
+    }
+    expect(stems).toBeGreaterThanOrEqual(props.arrowLanes);
   });
 });

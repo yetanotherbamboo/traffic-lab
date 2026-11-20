@@ -228,7 +228,8 @@ void main() {
     float far = smoothstep(0.25, 0.6, max(fw.x, fw.y));  // blend to an average tone when tiny
     col = mix(mix(col, glass, win), col * 0.86, far);
   }
-  float ao = mix(0.62, 1.0, clamp(vWorld.y / 4.0, 0.0, 1.0)); // cheap contact darkening near the ground
+  // Cheap contact darkening near the ground; not for flat road paint (under 10 cm tall).
+  float ao = vKindH.y < 0.1 ? 1.0 : mix(0.62, 1.0, clamp(vWorld.y / 4.0, 0.0, 1.0));
   col = shade(col, normalize(vNormal), ao);
   outColor = vec4(applyFog(zoneGrade(col, vWorld), vWorld), 1.0);
 }`;

@@ -199,6 +199,7 @@ _Last updated: 2026-11-20_
     - **Blinkers:** amber lamps at the front and rear corners blink, with a per-car phase, when turning within 45 m, through a turn, and during lane changes (`src/render/lights.ts`).
     - **Glow:** soft premultiplied glow sprites with a minimum on-screen size, so signals stay readable when zoomed out and blinkers show at mid zoom. This adds 2 draw calls (lights, glows).
   - **Van model (2026-11-20):** vans (`TrafficSim.van`, about 10% of vehicles) have their own low-poly model: a tall cargo box behind a raked windscreen with a short bonnet, glazed only at the cab (shader kind 4). This adds 1 draw call.
+  - **Turn arrows fix (2026-11-20):** arrows follow the lane's path (they used to run straight back from the stop line and drift off curved approaches). Short approaches between close junctions get the arrow nearer the stop line (it used to be skipped below 14 m; now only below 5.5 m). Flat road paint no longer gets the near-ground darkening, so arrows and stop lines stay crisp when zoomed out.
 
 ### Next
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**

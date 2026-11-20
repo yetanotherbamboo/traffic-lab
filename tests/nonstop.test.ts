@@ -129,6 +129,48 @@ describe('non-stop lanes', () => {
     });
   }
 
+  it('queues on a non-stop lane back up through the junction without blocking anyone', () => {
+    // The T at the origin (side road: right turn in only, signals) and, 35 m west, a busy all-way
+    // stop whose queue backs up through the T on the westbound (non-stop) lane.
+    const net = new RoadNetwork();
+    const c = net.addNode([0, 0, 0]);
+    const east = net.addNode([200, 0, 0]), south = net.addNode([0, 0, 200]), w = net.addNode([-35, 0, 0]);
+    const far = net.addNode([-235, 0, 0]), wn = net.addNode([-35, 0, -200]), ws = net.addNode([-35, 0, 200]);
+    const eastSeg = net.addSegment(c, east, STREET);
+    net.addSegment(c, w, STREET);
+    const side = net.addSegment(c, south, ONE_WAY_IN);
+    for (const e of [far, wn, ws]) net.addSegment(w, e, STREET);
+    setTurns(net, side, c, 0, TURN_RIGHT);
+    setControl(net, c, 'signal');
+    setControl(net, w, 'allway');
+    setFreeFlow(net, c, true);
+    const graph = new LaneGraph(net);
+    const sim = new TrafficSim(graph, [
+      { node: east, rate: 700 }, { node: south, rate: 300 }, { node: far, rate: 300 }, { node: wn, rate: 600 }, { node: ws, rate: 600 },
+    ], 5);
+    const freeConn = new Set(graph.lanes[arriving(graph, eastSeg, c)[0]!]!.next);
+    const sideConn = new Set(graph.lanes.filter((l) => l.kind === 'road' && l.segment === side).flatMap((l) => l.next));
+    const last = new Int32Array(sim.capacity).fill(-1);
+    let collisions = 0, queuedInside = 0, held = 0, sideTurns = 0;
+    for (let t = 1; t <= 6000; t++) {
+      sim.step(0.1);
+      for (let i = 0; i < sim.capacity; i++) {
+        const ln = sim.alive[i] ? sim.lane[i]! : -1;
+        if (ln !== last[i] && sideConn.has(ln)) sideTurns++;
+        last[i] = ln;
+        if (!sim.alive[i] || !freeConn.has(sim.lane[i]!)) continue;
+        if (sim.v[i]! < 0.1) queuedInside += 0.1;
+        if (sim.waiting[i]) held += 0.1;
+      }
+      if (t % 2 === 0) collisions += overlaps(sim);
+    }
+    expect(queuedInside, 'seconds cars stood in the junction on the non-stop lane').toBeGreaterThan(10);
+    expect(held, 'the junction never holds them back').toBe(0);
+    expect(collisions, 'overlapping vehicles').toBe(0);
+    // The side road keeps turning in past the queue (300 vehicles/h ≈ 50 in 10 min).
+    expect(sideTurns).toBeGreaterThan(40);
+  });
+
   it('multi-lane roads: only the free lanes skip the signal, the others still stop', () => {
     const t = tee(AVENUE, ONE_WAY_IN);
     setTurns(t.net, t.sideSeg, t.centre, 0, TURN_RIGHT);

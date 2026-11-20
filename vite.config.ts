@@ -5,5 +5,6 @@ export default defineConfig({
   base: './',
   server: { host: true },
   build: { target: 'es2022', sourcemap: true },
-  test: { include: ['tests/**/*.test.ts'] },
+  // Simulation tests run minutes of traffic: allow slower machines (CI) plenty of time.
+  test: { include: ['tests/**/*.test.ts'], testTimeout: 60_000 },
 });

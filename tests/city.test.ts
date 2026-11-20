@@ -3,7 +3,7 @@ import { Rng } from '../src/core/rng';
 import { LIT_STRIDE, SHADOW_STRIDE, generateCity, lotsOverlap, pointInLot } from '../src/env/city';
 import { contextDistance, sdRoundRect, zoneDistance } from '../src/env/zone';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork } from '../src/game/testScene';
-import { coneGeometry, crownGeometry, roofGeometry } from '../src/render/geometry';
+import { carGeometry, coneGeometry, crownGeometry, roofGeometry, vanGeometry } from '../src/render/geometry';
 
 describe('Rng', () => {
   it('is deterministic per seed and in [0, 1)', () => {
@@ -72,7 +72,7 @@ describe('generateCity', () => {
 
 describe('environment meshes', () => {
   it('have outward-facing normals', () => {
-    for (const [g, centre] of [[roofGeometry(), [0, 0.3, 0]], [crownGeometry(), [0, 1, 0]], [coneGeometry(), [0, 0.3, 0]]] as const) {
+    for (const [g, centre] of [[roofGeometry(), [0, 0.3, 0]], [crownGeometry(), [0, 1, 0]], [coneGeometry(), [0, 0.3, 0]], [carGeometry(), [0, 0.4, 0]], [vanGeometry(), [0, 0.4, 0]]] as const) {
       const v = g.vertices;
       for (let i = 0; i < v.length; i += 18) {
         const mx = (v[i]! + v[i + 6]! + v[i + 12]!) / 3 - centre[0];
@@ -81,5 +81,18 @@ describe('environment meshes', () => {
         expect(mx * v[i + 3]! + my * v[i + 4]! + mz * v[i + 5]!).toBeGreaterThan(0);
       }
     }
+  });
+
+  it('van is a tall box with a bonnet ledge and raked windscreen inside the unit footprint', () => {
+    const v = vanGeometry().vertices;
+    let maxY = 0, roofFront = -1;
+    for (let i = 0; i < v.length; i += 6) {
+      expect(Math.abs(v[i]!)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(v[i + 2]!)).toBeLessThanOrEqual(0.5);
+      maxY = Math.max(maxY, v[i + 1]!);
+      if (v[i + 1]! > 0.9) roofFront = Math.max(roofFront, v[i]!);
+    }
+    expect(maxY).toBeGreaterThan(0.95); // full-height cargo box, unlike the car's cabin
+    expect(roofFront).toBeLessThan(0.4); // roof stops short of the nose: sloped windscreen
   });
 });

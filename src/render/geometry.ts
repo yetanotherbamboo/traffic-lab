@@ -130,6 +130,28 @@ export function carGeometry(): Geometry {
   ]);
 }
 
+/**
+ * Low-poly van, unit size like `carGeometry`: a full-length box body with a short bonnet ledge
+ * at the front and a tall cargo box behind a raked windscreen. The shader glazes only the cab.
+ */
+export function vanGeometry(): Geometry {
+  const body = flatConvex(boxTris([-0.5, 0.1, -0.5], [0.5, 0.46, 0.5]), [0, 0.28, 0]);
+  // Upper box: side profile (-0.5, 0.46) (0.38, 0.46) (0.22, 0.97) (-0.5, 0.97), slightly narrower.
+  const y0 = 0.46, y1 = 0.97, w = 0.48;
+  const c = (x: number, y: number, z: number): V3 => [x, y, z];
+  const bl = (z: number): V3[] => [c(-0.5, y0, z), c(0.38, y0, z), c(0.22, y1, z), c(-0.5, y1, z)];
+  const [l, r] = [bl(-w), bl(w)];
+  const quad = (a: V3, b: V3, cc: V3, d: V3): [V3, V3, V3][] => [[a, b, cc], [a, cc, d]];
+  const tris: [V3, V3, V3][] = [
+    ...quad(l[0]!, l[1]!, l[2]!, l[3]!), // left side
+    ...quad(r[0]!, r[1]!, r[2]!, r[3]!), // right side
+    ...quad(l[1]!, r[1]!, r[2]!, l[2]!), // windscreen
+    ...quad(l[2]!, r[2]!, r[3]!, l[3]!), // roof
+    ...quad(l[3]!, r[3]!, r[0]!, l[0]!), // rear doors
+  ];
+  return merge([body, flatConvex(tris, [-0.1, (y0 + y1) / 2, 0])]);
+}
+
 /** Flat square on y=0 centred at origin, position only. */
 export function planeGeometry(size: number): { vertices: Float32Array; indices: Uint16Array } {
   const h = size / 2;

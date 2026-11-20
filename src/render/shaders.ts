@@ -165,20 +165,20 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 3) in vec4 iPosRot;  // xyz = position, w = rotation around Y
 layout(location = 4) in vec3 iScale;
 layout(location = 5) in vec3 iColor;
-layout(location = 8) in float iKind;   // 0 = plain, 1 = facade with windows, 2 = vehicle, 3 = emissive
+layout(location = 8) in float iKind;   // 0 = plain, 1 = facade with windows, 2 = car, 3 = emissive, 4 = van
 uniform mat4 uViewProj;
 out vec3 vWorld;
 out vec3 vNormal;
 out vec3 vColor;
 out vec3 vLocal;       // scaled object-space position (metres), for window patterns
 flat out vec3 vLocalN;
-flat out vec2 vKindH;  // kind, object height
+flat out vec3 vKindH;  // kind, object height, object length
 void main() {
   float c = cos(iPosRot.w), s = sin(iPosRot.w);
   vec3 p = aPos * iScale;
   vLocal = p;
   vLocalN = aNormal;
-  vKindH = vec2(iKind, iScale.y);
+  vKindH = vec3(iKind, iScale.y, iScale.x);
   p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
   vNormal = vec3(c * aNormal.x + s * aNormal.z, aNormal.y, -s * aNormal.x + c * aNormal.z);
   vWorld = p + iPosRot.xyz;
@@ -193,7 +193,7 @@ in vec3 vNormal;
 in vec3 vColor;
 in vec3 vLocal;
 flat in vec3 vLocalN;
-flat in vec2 vKindH;
+flat in vec3 vKindH;
 out vec4 outColor;
 ${COMMON}
 
@@ -208,6 +208,10 @@ void main() {
   }
   if (kind == 2 && vLocal.y > vKindH.y * 0.52 && vLocalN.y < 0.5) {
     col = vec3(0.24, 0.29, 0.37); // vehicle cabin glass
+  }
+  if (kind == 4 && vLocalN.y < 0.5 && vLocal.y > vKindH.y * 0.6 && vLocal.y < vKindH.y * 0.9
+      && (vLocalN.x > 0.3 || (abs(vLocalN.z) > 0.5 && vLocal.x > vKindH.z * 0.06))) {
+    col = vec3(0.24, 0.29, 0.37); // van: windscreen and cab side windows only
   }
   if (kind == 1 && abs(vLocalN.y) < 0.5) {
     // Windows: one row per 3.2 m floor, one column per 2.6 m.

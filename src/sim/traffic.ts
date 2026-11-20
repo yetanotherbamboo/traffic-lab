@@ -90,6 +90,8 @@ export class TrafficSim {
   readonly b: Float32Array;
   readonly s0: Float32Array;
   readonly color: Uint8Array;
+  /** 1 for vans (taller, longer; drawn with the van model). */
+  readonly van: Uint8Array;
   /** Junction state: committed to the next junction / held by control / time of stopping at an all-way stop. */
   readonly committed: Uint8Array;
   readonly waiting: Uint8Array;
@@ -148,6 +150,7 @@ export class TrafficSim {
     this.length = f32(); this.width = f32(); this.height = f32();
     this.speedFactor = f32(); this.T = f32(); this.aMax = f32(); this.b = f32(); this.s0 = f32();
     this.color = new Uint8Array(capacity);
+    this.van = new Uint8Array(capacity);
     this.committed = new Uint8Array(capacity);
     this.waiting = new Uint8Array(capacity);
     this.stopTime = f32();
@@ -234,6 +237,7 @@ export class TrafficSim {
     this.b[i] = this.base.b * rng.range(0.85, 1.15);
     this.s0[i] = this.base.s0;
     this.color[i] = Math.floor(rng.next() * 256);
+    this.van[i] = van && opts.length === undefined ? 1 : 0;
     this.committed[i] = 0;
     this.waiting[i] = 0;
     this.stopTime[i] = -1;
@@ -979,6 +983,7 @@ export class TrafficSim {
       this.acc[i] = 0;
       for (const k of ['length', 'width', 'height', 'speedFactor', 'T', 'aMax', 'b', 's0'] as const) this[k][i] = old[k][i]!;
       this.color[i] = old.color[i]!;
+      this.van[i] = old.van[i]!;
       const onConnector = lanes[lane]!.kind === 'connector';
       this.committed[i] = onConnector ? 1 : 0;
       this.waiting[i] = 0;

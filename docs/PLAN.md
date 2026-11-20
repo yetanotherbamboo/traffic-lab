@@ -198,6 +198,7 @@ _Last updated: 2026-11-20_
     - **Impatience:** a driver who has waited a while accepts a smaller gap (margin 2 s → 1 s over 35 s).
     - **Blinkers:** amber lamps at the front and rear corners blink, with a per-car phase, when turning within 45 m, through a turn, and during lane changes (`src/render/lights.ts`).
     - **Glow:** soft premultiplied glow sprites with a minimum on-screen size, so signals stay readable when zoomed out and blinkers show at mid zoom. This adds 2 draw calls (lights, glows).
+  - **Van model (2026-11-20):** vans (`TrafficSim.van`, about 10% of vehicles) have their own low-poly model: a tall cargo box behind a raked windscreen with a short bonnet, glazed only at the cab (shader kind 4). This adds 1 draw call.
 
 ### Next
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**

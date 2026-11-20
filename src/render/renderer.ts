@@ -6,7 +6,7 @@ import { Program } from '../gl/program';
 import type { OrbitCamera } from './camera';
 import { GLOW_STRIDE } from './lights';
 import {
-  type Geometry, boxGeometry, carGeometry, coneGeometry, crownGeometry, planeGeometry, roofGeometry,
+  type Geometry, boxGeometry, carGeometry, vanGeometry, coneGeometry, crownGeometry, planeGeometry, roofGeometry,
 } from './geometry';
 import type { MeshData } from './roadMesh';
 import {
@@ -35,6 +35,7 @@ export class Renderer {
   private readonly kits: Record<KitName, Mesh>;
   private readonly shadows: Mesh;
   private readonly vehicles: Mesh;
+  private readonly vans: Mesh;
   private readonly props: Mesh;
   private readonly overlay: Mesh;
   private readonly litMeshes: Mesh[];
@@ -66,11 +67,13 @@ export class Renderer {
 
     const car = carGeometry();
     this.vehicles = new Mesh(gl, car.vertices, POS_NORMAL, car.indices, LIT_INSTANCE);
+    const van = vanGeometry();
+    this.vans = new Mesh(gl, van.vertices, POS_NORMAL, van.indices, LIT_INSTANCE);
     const box = boxGeometry();
     this.props = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
     this.overlay = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
     this.lights = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
-    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.props, this.lights, this.overlay];
+    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.vans, this.props, this.lights, this.overlay];
   }
 
   /**
@@ -86,8 +89,10 @@ export class Renderer {
     }
   }
 
-  setVehicles(data: Float32Array, count: number): void {
-    this.upload(this.vehicles, data, count);
+  /** Cars and vans, each with its own preallocated buffer. */
+  setVehicles(cars: Float32Array, carCount: number, vans: Float32Array, vanCount: number): void {
+    this.upload(this.vehicles, cars, carCount);
+    this.upload(this.vans, vans, vanCount);
   }
 
   /** Small self-lit boxes on vehicles (blinkers). Same preallocated buffer every frame. */

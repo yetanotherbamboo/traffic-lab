@@ -415,3 +415,61 @@ describe('starting a road near a junction', () => {
     expect(streetKinds.indexOf('segment')).toBeLessThanOrEqual(firstOk);
   });
 });
+
+describe('drawing roads by tapping start and end', () => {
+  it('first tap places the start, the second builds; drags are left to the camera', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    expect(ed.dragTool).toBe(true);
+    ed.setRoadMode('tap');
+    expect(ed.dragTool).toBe(false);
+    const before = w.net.segments.size, spentBefore = w.spent;
+
+    ed.tap([30, 0, 30], 1.5);
+    expect(ed.pendingStart).toBe(true);
+    expect(w.net.segments.size).toBe(before);
+    // Mouse: the road follows the pointer from the start.
+    ed.hoverAt([30, 0, 50], 1.5);
+    expect(ed.draft?.candidate).toBeTruthy();
+    // An end outside the zone: refused, but the start stays for another try.
+    ed.tap([30, 0, 200], 1.5);
+    expect(ed.message).toBe('You can only build inside the construction zone');
+    expect(ed.pendingStart).toBe(true);
+    expect(w.net.segments.size).toBe(before);
+    // A good end builds the road and clears the start.
+    ed.tap([30, 0, 55], 1.5);
+    expect(ed.pendingStart).toBe(false);
+    expect(ed.draft).toBeNull();
+    expect(w.net.segments.size).toBe(before + 1);
+    expect(w.spent).toBeGreaterThan(spentBefore);
+    const built = [...w.net.segments.values()].at(-1)!;
+    const ends = [w.net.node(built.a).pos, w.net.node(built.b).pos].map((p) => [p[0], p[2]]);
+    expect(ends).toContainEqual([30, 30]);
+    expect(ends).toContainEqual([30, 55]);
+    // One undo removes it.
+    ed.undo();
+    expect(w.net.segments.size).toBe(before);
+  });
+
+  it('tapping the start again cancels; no start where a road cannot begin', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.setRoadMode('tap');
+    ed.tap([30, 0, 30], 1.5);
+    expect(ed.pendingStart).toBe(true);
+    ed.tap([30.5, 0, 30], 1.5);
+    expect(ed.pendingStart).toBe(false);
+    expect(ed.draft).toBeNull();
+    // Too close to the centre junction on the avenue (see the red-cross test).
+    ed.tap([17, 0, 0], 1.5);
+    expect(ed.pendingStart).toBe(false);
+    expect(ed.message).toBe(TOO_CLOSE);
+    // Switching tools or modes drops a placed start.
+    ed.tap([30, 0, 30], 1.5);
+    ed.setRoadMode('drag');
+    expect(ed.pendingStart).toBe(false);
+    expect(ed.draft).toBeNull();
+  });
+});

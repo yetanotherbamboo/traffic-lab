@@ -63,6 +63,11 @@ const HISTORY_LIMIT = 100;
 export class Editor {
   tool: Tool = 'view';
   preset = 0;
+  /**
+   * How the Road tool draws: 'drag' from start to end in one gesture, or 'tap' the start and then
+   * the end (one-finger drags move the view in between).
+   */
+  roadMode: 'drag' | 'tap' = 'drag';
   selection: Pick = null;
   draft: Draft | null = null;
   hover: Marker | null = null;
@@ -92,7 +97,20 @@ export class Editor {
 
   /** Drag tools take over single-finger drags; the other tools leave them to the camera. */
   get dragTool(): boolean {
-    return this.tool === 'road' || this.tool === 'bend';
+    return (this.tool === 'road' && this.roadMode === 'drag') || this.tool === 'bend';
+  }
+
+  setRoadMode(m: 'drag' | 'tap'): void {
+    this.cancel();
+    this.roadMode = m;
+    this.hover = null;
+    this.message = null;
+    this.changed();
+  }
+
+  /** Tap mode: a start point is placed and the next tap ends the road. */
+  get pendingStart(): boolean {
+    return this.tool === 'road' && this.roadMode === 'tap' && this.start !== null;
   }
 
   private get net(): RoadNetwork {
@@ -178,6 +196,10 @@ export class Editor {
 
   /** Mouse hover (desktop): show where a road would snap. */
   hoverAt(p: Vec3 | null, tol: number): void {
+    if (this.pendingStart && p) {
+      this.move(p, tol); // rubber-band preview from the placed start
+      return;
+    }
     if (this.tool !== 'road' || !p || this.start) {
       if (this.hover) {
         this.hover = null;
@@ -188,6 +210,44 @@ export class Editor {
     const a = snapPoint(this.net, this.host.zone, p, tol).anchor;
     this.hover = { pos: a.pos, kind: this.startProblem(a) ? 'blocked' : a.kind };
     this.changed();
+  }
+
+  /**
+   * Tap mode: the first tap places the start (refused where no road can start), the second builds
+   * the road. Tapping the start again cancels; a road that can't be built keeps the start and
+   * shows why, so the player can tap another end.
+   */
+  private tapRoad(p: Vec3, tol: number): void {
+    if (!this.start) {
+      const a = snapPoint(this.net, this.host.zone, p, tol).anchor;
+      const problem = this.outside(a) ?? this.startProblem(a);
+      if (problem) {
+        this.message = problem;
+      } else {
+        this.start = a;
+        this.hover = null;
+        this.draft = {
+          candidate: null, changed: [], touched: [], markers: [{ pos: a.pos, kind: a.kind }],
+          error: null, cost: 0, demolish: [], demolishCost: 0,
+        };
+      }
+      this.changed();
+      return;
+    }
+    const s = this.start.pos;
+    if (Math.hypot(p[0] - s[0], p[2] - s[2]) < tol) {
+      this.cancel();
+      return;
+    }
+    this.move(p, tol);
+    const d = this.draft;
+    if (d?.candidate && !d.error && d.touched.length > 0) {
+      this.commit(d.candidate, d.demolish, d.cost + d.demolishCost);
+      this.cancel();
+    } else {
+      this.message = d?.error ?? 'Tap another point to end the road';
+      this.changed();
+    }
   }
 
   private problemCache = { net: null as RoadNetwork | null, key: '', result: null as string | null };
@@ -205,11 +265,13 @@ export class Editor {
     return c.result;
   }
 
-  /** Tap with a tap tool: select or delete. */
+  /** Tap with a tap tool: select or delete, or place a road's start / end in tap mode. */
   tap(p: Vec3, tol: number): void {
     this.message = null;
     const net = this.net;
-    if (this.tool === 'select') {
+    if (this.tool === 'road' && this.roadMode === 'tap') {
+      this.tapRoad(p, tol);
+    } else if (this.tool === 'select') {
       const r = roundaboutAt(net, p, tol * 0.5);
       if (r && zoneDistance(this.host.zone, r.centre[0], r.centre[2]) < 0) {
         this.selection = { kind: 'roundabout', id: r.id, pos: r.centre };

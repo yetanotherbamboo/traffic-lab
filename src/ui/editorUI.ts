@@ -111,7 +111,7 @@ export class EditorUI {
     this.redoBtn.disabled = !ed.canRedo;
     this.renderInfo();
     const sel = ed.selection;
-    const key = `${ed.tool}|${ed.preset}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
+    const key = `${ed.tool}|${ed.preset}|${ed.roadMode}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
     if (key !== this.panelKey) {
       this.panelKey = key;
       this.renderPanel();
@@ -137,6 +137,10 @@ export class EditorUI {
       }
     } else if (ed.message) {
       out.push(h('span', { class: 'err' }, ed.message));
+    } else if (ed.tool === 'road' && ed.roadMode === 'tap') {
+      out.push(ed.pendingStart
+        ? 'Tap where the road should end · tap the start again to cancel'
+        : 'Tap where the road should start · drag to move the view');
     } else {
       out.push(HINTS[ed.tool]);
     }
@@ -154,6 +158,9 @@ export class EditorUI {
           this.panelKey = '';
           this.seen = -1;
         }))));
+      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Draw by'),
+        chip('Dragging', ed.roadMode === 'drag', () => ed.setRoadMode('drag')),
+        chip('Tapping start and end', ed.roadMode === 'tap', () => ed.setRoadMode('tap'))));
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {

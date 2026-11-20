@@ -1,8 +1,8 @@
 import type { Vec3 } from '../core/math';
 import { KIND_EMISSIVE, KIND_PLAIN, LIT_STRIDE } from '../env/city';
 import { rightOf } from '../network/network';
-import { SIGNAL_GREEN, SIGNAL_RED, type SignalController } from '../sim/junctions';
-import { TURN_BIT } from '../sim/laneGraph';
+import { type JunctionModel, SIGNAL_GREEN, SIGNAL_RED, type SignalController } from '../sim/junctions';
+import { type LaneGraph, TURN_BIT } from '../sim/laneGraph';
 import type { TrafficSim } from '../sim/traffic';
 import { GLOW_STRIDE } from './lights';
 
@@ -10,6 +10,7 @@ import { GLOW_STRIDE } from './lights';
 const PAINT: Vec3 = [0.93, 0.92, 0.88];
 const POLE: Vec3 = [0.3, 0.32, 0.36];
 const STOP_SIGN: Vec3 = [0.84, 0.27, 0.24];
+const CENTRE_PAINT: Vec3 = [0.95, 0.78, 0.35];
 const LAMP: Record<number, Vec3> = { 0: [0.35, 0.92, 0.55], 1: [1.0, 0.76, 0.3], 2: [0.98, 0.32, 0.28] };
 const SIDEWALK_Y = 0.18;
 /** Turn arrows start this far (m) before the stop line, or nearer on short approaches. */
@@ -61,9 +62,11 @@ export class JunctionProps {
         const minor = control === 'priority' && !major?.has(seg);
         const lines = control !== 'priority' || minor;
 
-        // Lines across every incoming lane: solid stop line, or dashed give-way line.
+        // Lines across every incoming lane: solid stop line, or dashed give-way line. Non-stop lanes
+        // get none; their markings continue through the junction instead.
         for (const id of lines ? laneIds : []) {
           const l = graph.lanes[id]!;
+          if (junctions.free[id]) continue;
           const end = l.path.point(l.path.count - 1), dir = l.path.dirAt(true), r = rightOf(dir);
           const h = Math.atan2(-dir[2], dir[0]);
           const c: Vec3 = [end[0] - dir[0] * 0.5, ROAD_Y, end[2] - dir[2] * 0.5];
@@ -125,10 +128,12 @@ export class JunctionProps {
             }
           }
         }
-        if (!lines || minor) continue;
+        for (const id of laneIds) if (junctions.free[id]) this.nonStopLines(graph, junctions, id, box);
+        const stopping = laneIds.filter((id) => !junctions.free[id]);
+        if (!lines || minor || stopping.length === 0) continue;
 
-        // Pole on the kerb next to the outermost lane.
-        const kerb = laneIds.map((id) => graph.lanes[id]!).reduce((a, b) => (b.index > a.index ? b : a));
+        // Pole on the kerb next to the outermost lane that stops.
+        const kerb = stopping.map((id) => graph.lanes[id]!).reduce((a, b) => (b.index > a.index ? b : a));
         const end = kerb.path.point(kerb.path.count - 1), dir = kerb.path.dirAt(true), r = rightOf(dir);
         const h = Math.atan2(-dir[2], dir[0]);
         const off = kerb.width / 2 + 1.5;
@@ -148,6 +153,58 @@ export class JunctionProps {
     this.fixed = new Float32Array(out);
     this.buffer = new Float32Array(this.fixed.length + this.lamps.length * LIT_STRIDE);
     this.buffer.set(this.fixed);
+  }
+
+  /**
+   * Markings of a non-stop lane, continued through the junction along its straight-on path (or
+   * its only path): the centre line or a solid line wherever it runs next to lanes that stop, a
+   * dashed divider next to another non-stop lane, and the road's edge line on a side no movement
+   * of the lane turns off to.
+   */
+  private nonStopLines(graph: LaneGraph, junctions: JunctionModel, id: number,
+    box: (p: Vec3, heading: number, scale: Vec3, color: Vec3) => void): void {
+    const l = graph.lanes[id]!;
+    const conns = l.next.map((c) => graph.lanes[c]!);
+    const C = conns.find((c) => c.turn === 'straight') ?? (conns.length === 1 ? conns[0]! : null);
+    if (!C) return;
+    const group = graph.groups[l.group]!;
+    const seg = graph.net.segment(l.segment);
+    const twoWay = seg.profile.forward > 0 && seg.profile.backward > 0;
+    const hw = l.width / 2;
+    const turns = new Set(conns.map((c) => c.turn));
+    const freeLane = (k: number): boolean => {
+      const n = group.find((g) => graph.lanes[g]!.index === k);
+      return n !== undefined && junctions.free[n] === 1;
+    };
+    const line = (u: number, w: number, color: Vec3, dashed: boolean): void => {
+      const path = C.path, len = path.length;
+      const n = Math.max(1, Math.ceil(len / 1.5));
+      let prev: Vec3 | null = null;
+      for (let k = 0; k <= n; k++) {
+        const s = (len * k) / n;
+        path.sample(s, scratch);
+        const h = scratch[3]!;
+        const p: Vec3 = [scratch[0]! + Math.sin(h) * u, ROAD_Y, scratch[2]! + Math.cos(h) * u];
+        if (prev && (!dashed || ((s - len / (2 * n)) / 9) % 1 < 0.34)) {
+          const dx = p[0] - prev[0], dz = p[2] - prev[2];
+          box([(p[0] + prev[0]) / 2, ROAD_Y, (p[2] + prev[2]) / 2], Math.atan2(-dz, dx), [Math.hypot(dx, dz) + 0.02, 0.02, w], color);
+        }
+        prev = p;
+      }
+    };
+    // Left side.
+    if (l.index === 0) {
+      if (twoWay) line(-hw + 0.14, 0.12, CENTRE_PAINT, false);
+      else if (!turns.has('left')) line(-hw + 0.35, 0.16, PAINT, false);
+    } else if (!freeLane(l.index - 1)) {
+      line(-hw, 0.14, PAINT, false);
+    }
+    // Right side (the divider between two non-stop lanes is drawn by the inner one).
+    if (l.index === group.length - 1) {
+      if (!turns.has('right')) line(hw - 0.35, 0.16, PAINT, false);
+    } else {
+      line(hw, 0.14, PAINT, freeLane(l.index + 1));
+    }
   }
 
   /**

@@ -1,6 +1,6 @@
 import { formatMoney } from '../editor/cost';
 import { type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
-import { MAX_LANES, setControl, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
+import { MAX_LANES, setControl, setFreeFlow, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
 import {
   RING_MAX_LANES, RING_MIN_LANES, convertToRoundabout, outerRadius, removeRoundabout, setRoundaboutLanes, setRoundaboutSize,
 } from '../editor/roundabout';
@@ -258,6 +258,17 @@ export class EditorUI {
       });
       if (ctrl) out.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Cycle'), `${ctrl.cycle} s (incl. yellow and all-red)`));
     }
+
+    // Non-stop lanes: lanes that cross and merge with no other traffic may skip the control.
+    const eligible = w.sim.junctions.nonStop.get(nodeId) ?? [];
+    const on = node.freeFlow === true;
+    out.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Non-stop lanes'),
+      chip('Off', !on, () => on && this.act((n) => setFreeFlow(n, nodeId, false))),
+      chip('On', on, () => !on && this.act((n) => setFreeFlow(n, nodeId, true)))));
+    out.push(h('div', { class: 'row' }, h('span', { class: 'label' }, eligible.length === 0
+      ? 'No lane can skip this junction yet: every lane crosses or merges with other traffic. Limit turns below to free one'
+      : `${eligible.length === 1 ? '1 lane crosses' : `${eligible.length} lanes cross`} no other traffic${on ? ` and never ${eligible.length === 1 ? 'stops' : 'stop'}` : ''} `,
+    ...eligible.map((id) => swatch(colorOf(w.graph.lanes[id]!.segment))))));
 
     // Turn lanes per approach, innermost lane first (left to right as the driver sees them).
     out.push(h('h3', {}, 'Turn lanes'));

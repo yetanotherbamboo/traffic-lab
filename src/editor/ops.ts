@@ -164,6 +164,13 @@ export function setControl(net: RoadNetwork, nodeId: number, control: JunctionCo
   net.node(nodeId).control = control;
 }
 
+/** Turns non-stop lanes on or off at a junction (see `RoadNode.freeFlow`). */
+export function setFreeFlow(net: RoadNetwork, nodeId: number, on: boolean): void {
+  const n = net.node(nodeId);
+  if (on) n.freeFlow = true;
+  else delete n.freeFlow;
+}
+
 export function setMajor(net: RoadNetwork, nodeId: number, pair: [number, number]): void {
   net.node(nodeId).major = pair;
 }

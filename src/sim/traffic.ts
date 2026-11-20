@@ -545,6 +545,8 @@ export class TrafficSim {
   private mustStop(i: number, C: Lane, d: number): boolean {
     const ctrl = this.junctions.control.get(C.node);
     if (!ctrl) return false;
+    // Non-stop lanes cross nobody's path: only keep the exit clear.
+    if (this.junctions.free[C.id]) return this.exitBlocked(i, C);
     if (ctrl === 'signal') {
       const st = this.junctions.signalOf[C.id]!.state(C.id);
       const v = this.v[i]!;

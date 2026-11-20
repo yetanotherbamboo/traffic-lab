@@ -33,6 +33,12 @@ export interface RoadNode {
   greens?: Record<number, number>;
   /** Id of the roundabout this node lies on (where a road meets the ring, or a ring joint). */
   ring?: number;
+  /**
+   * Non-stop lanes: lanes whose every movement through this junction crosses and merges with no
+   * other traffic (e.g. the far lane of a T whose side road only turns right) ignore the junction
+   * control and drive straight through.
+   */
+  freeFlow?: boolean;
 }
 
 /**
@@ -67,7 +73,7 @@ export interface RoadSegment {
 /** Plain-data form of a network (levels, undo snapshots). */
 export interface NetworkData {
   nextId: number;
-  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number>; ring?: number }[];
+  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number>; ring?: number; freeFlow?: boolean }[];
   segments: {
     id: number; a: number; b: number; c1: Vec3; c2: Vec3; profile: LaneProfile; turnsA?: number[]; turnsB?: number[]; ring?: number;
   }[];
@@ -230,6 +236,7 @@ export class RoadNetwork {
         ...(n.major ? { major: [...n.major] as [number, number] } : {}),
         ...(n.greens ? { greens: { ...n.greens } } : {}),
         ...(n.ring !== undefined ? { ring: n.ring } : {}),
+        ...(n.freeFlow ? { freeFlow: true } : {}),
       })),
       segments: [...this.segments.values()].map((s) => ({
         id: s.id, a: s.a, b: s.b, c1: [...s.curve.p1] as Vec3, c2: [...s.curve.p2] as Vec3, profile: { ...s.profile },
@@ -251,6 +258,7 @@ export class RoadNetwork {
       if (n.major) node.major = [...n.major];
       if (n.greens) node.greens = { ...n.greens };
       if (n.ring !== undefined) node.ring = n.ring;
+      if (n.freeFlow) node.freeFlow = true;
       net.nodes.set(n.id, node);
     }
     for (const s of d.segments) {

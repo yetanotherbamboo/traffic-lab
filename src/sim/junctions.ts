@@ -51,7 +51,7 @@ export class SignalController {
   }
 
   update(dt: number): void {
-    this.t = (this.t + dt) % this.cycle;
+    if (this.cycle > 0) this.t = (this.t + dt) % this.cycle;
   }
 
   /** SIGNAL_GREEN / SIGNAL_YELLOW / SIGNAL_RED for a connector of this junction. */
@@ -184,6 +184,13 @@ export class JunctionModel {
   /** Major-road segments at priority junctions. */
   readonly major = new Map<number, Set<number>>();
   /**
+   * Incoming road lanes per junction that could run non-stop: none of their movements crosses or
+   * merges with other traffic. Listed whether or not the junction has non-stop lanes turned on.
+   */
+  readonly nonStop = new Map<number, number[]>();
+  /** 1 for road lanes and their connectors that drive through their junction without control. */
+  readonly free: Uint8Array;
+  /**
    * For connectors that split from the same lane: distance along `a` until it is clear of `b`
    * (key a * 65536 + b). Until then vehicles on the two connectors must keep their distance.
    */
@@ -199,6 +206,7 @@ export class JunctionModel {
     this.conflicts = lanes.map(() => []);
     this.conflictSet = lanes.map(() => new Set());
     this.signalOf = lanes.map(() => null);
+    this.free = new Uint8Array(lanes.length);
 
     const byNode = new Map<number, Lane[]>();
     for (const l of lanes) {
@@ -222,11 +230,26 @@ export class JunctionModel {
         this.control.set(nodeId, control);
         this.incoming.set(nodeId, [...new Set(conns.map((c) => c.prev[0]!))]);
         if (control === 'priority') this.major.set(nodeId, this.majorRoad(nodeId));
-        if (control === 'signal') this.buildSignal(nodeId, conns);
       }
 
       for (let x = 0; x < conns.length; x++) {
         for (let y = x + 1; y < conns.length; y++) this.addConflict(nodeId, conns[x]!, conns[y]!);
+      }
+
+      if (node.segments.length >= 3 && node.ring === undefined) {
+        // Non-stop candidates: every movement of the lane is free of crossings and merges.
+        const ok = this.incoming.get(nodeId)!.filter((id) => {
+          const l = lanes[id]!;
+          return l.next.length > 0 && l.next.every((c) => this.conflicts[c]!.length === 0);
+        });
+        this.nonStop.set(nodeId, ok);
+        if (node.freeFlow) {
+          for (const id of ok) {
+            this.free[id] = 1;
+            for (const c of lanes[id]!.next) this.free[c] = 1;
+          }
+        }
+        if (this.control.get(nodeId) === 'signal') this.buildSignal(nodeId, conns.filter((c) => !this.free[c.id]));
       }
     }
   }
@@ -261,6 +284,7 @@ export class JunctionModel {
     const armLanes = new Map<number, number>();
     for (const id of this.incoming.get(nodeId)!) {
       const l = lanes[id]!;
+      if (this.free[id]) continue; // non-stop lanes have no signal
       armDir.set(l.segment, l.path.dirAt(true));
       armLanes.set(l.segment, (armLanes.get(l.segment) ?? 0) + 1);
     }

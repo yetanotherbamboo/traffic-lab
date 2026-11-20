@@ -206,7 +206,12 @@ _Last updated: 2026-11-20_
 - **Widening roads demolishes frontage:** adding lanes pushes sidewalks into lots, which are demolished (and paid for) immediately. The lanes panel has no cost preview.
 - **Lane-mapping on edits:** vehicles inside a junction whose connector no longer exists are removed rather than re-routed.
 - **Preview cost on phones:** each drag move clones the network, validates and rebuilds the road mesh, about 3 ms on a laptop. Watch for lag on the phone.
-- **Junction overlaps:** rare brief overlaps remain inside junctions. Conflict zones are placed where paths first come within 1.9 m, not at the true crossing, so a car stopped at a zone edge can be grazed (about 2 samples per 2 simulated hours in the city). Conflict zones are now sized by crossing angle, and when two cars are both inside one zone, the one less far across stops.
+- **Junction gap acceptance (fixed 2026-11-20):** a left-turner used to cut in front of oncoming traffic, for three reasons:
+  - It estimated its own arrival as if it had already slowed to turning speed.
+  - At higher approach speeds it committed before it started looking for gaps.
+  - Conflict zones were too short next to curved paths.
+  - **Fixes:** the earliest arrival is used for "they're through before I arrive"; gaps are checked from before the commit point; zones are measured where the paths are closer than 2.8 m; and of two cars inside one zone, the one less far across stops.
+  - **Result:** 0 overlaps (checked every other step) in the city, 16 priority-junction seeds, signals and close-together junctions. The price: about 2% less city throughput and about 15% less on close-together junctions, because drivers are more careful. Commits take about 30 ms on a laptop.
 - **Deadlock breaker:** when it fires, a stuck vehicle creeps through, which can cause a brief visual overlap. This is rare at nominal demand and more frequent when the network is oversaturated (1.5× demand: a few samples per 20 minutes).
 - **Signal timings:** green time defaults to 10 s + 8 s per lane and can be changed per phase in the editor. No actuation or protected left phases yet.
 - **Free-flow routing:** routes use free-flow time only, so vehicles don't avoid congestion. Dynamic rerouting is a candidate for Milestone 7/8.

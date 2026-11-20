@@ -116,6 +116,39 @@ function firstConflict(a: Path, b: Path, within = CONFLICT_DIST): { sa: number; 
   return null;
 }
 
+/** Centre-to-centre distance below which two cars on crossing paths would touch (m). */
+const BODY_CLEAR = 2.8;
+
+/** Distance in the ground plane from point (x, z) to polyline `p`. */
+function distToPath(p: Path, x: number, z: number): number {
+  const P = p.pts;
+  let best = Infinity;
+  for (let j = 0; j + 1 < p.count; j++) {
+    best = Math.min(best, segSeg(x, z, x, z, P[j * 3]!, P[j * 3 + 2]!, P[j * 3 + 3]!, P[j * 3 + 5]!)[2]);
+  }
+  return best;
+}
+
+/**
+ * Conflict zone on path `a` around arc length `s0` where it crosses `b`: the stretch where `a`
+ * is closer than BODY_CLEAR to `b`, widened to at least ±minH. Returns [centre, half-length].
+ */
+function zoneAround(a: Path, b: Path, s0: number, minH: number): [number, number] {
+  const out = new Float32Array(4);
+  const near = (s: number): boolean => {
+    a.sample(s, out, 0);
+    return distToPath(b, out[0]!, out[2]!) < BODY_CLEAR;
+  };
+  const step = 0.25;
+  let lo = s0, hi = s0;
+  while (lo > 0 && near(lo - step)) lo -= step;
+  while (hi < a.length && near(hi + step)) hi += step;
+  lo = Math.min(lo - 0.3, s0 - minH);
+  hi = Math.max(hi + 0.3, s0 + minH);
+  const h = Math.min((hi - lo) / 2, 8);
+  return [(lo + hi) / 2, h];
+}
+
 /** Distance along `a` after which every later point of `a` is at least 2.3 m from path `b`. */
 function separation(a: Path, b: Path): number {
   const A = a.pts, B = b.pts;
@@ -288,11 +321,13 @@ export class JunctionModel {
       const ab = firstConflict(a.path, b.path);
       if (!ab) return;
       sa = ab.sa; sb = ab.sb;
-      // Zone half-length along each path: enough for two ~2 m wide cars crossing at this angle
-      // ((1 + |cos|) / sin for their half-widths), plus a margin.
+      // The zone is where the two paths are closer than two car half-widths plus a margin (measured,
+      // so curved paths, whose cars cut the inside of the curve, get the length they need), and at
+      // least what two ~2 m wide cars crossing at this angle need ((1 + |cos|) / sin) plus a margin.
       const sin = Math.max(ab.angle, 0.25), cos = Math.sqrt(Math.max(0, 1 - sin * sin));
       const h = Math.min(6, Math.max(1.2 / sin + 1, (1 + cos) / sin + 0.8));
-      ha = hb = h;
+      [sa, ha] = zoneAround(a.path, b.path, sa, h);
+      [sb, hb] = zoneAround(b.path, a.path, sb, h);
     }
     this.conflicts[a.id]!.push({ other: b.id, sSelf: sa, sOther: sb, h: ha, hOther: hb, yields: this.yields(nodeId, a, b) });
     this.conflicts[b.id]!.push({ other: a.id, sSelf: sb, sOther: sa, h: hb, hOther: ha, yields: this.yields(nodeId, b, a) });

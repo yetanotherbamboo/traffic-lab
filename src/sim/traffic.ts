@@ -412,7 +412,9 @@ export class TrafficSim {
     const list = this.laneVehicles[c.other]!;
     if (list.length === 0) return true;
     const v = this.v[i]!, vmax = C.speedLimit * this.speedFactor[i]!;
-    const tIn = timeTo(d + c.sSelf - c.h, v, this.aMax[i]!, vmax);
+    // Earliest arrival (no slowing for the turn yet) vs latest departure (at turning speed): judging
+    // "they are through before I arrive" with a late arrival estimate would cut in front of them.
+    const tIn = timeTo(d + c.sSelf - c.h, v, this.aMax[i]!, Math.max(vmax, v));
     const tOut = timeTo(d + c.sSelf + c.h + this.length[i]!, v, this.aMax[i]!, vmax);
     for (const j of list) if (!this.clearOf(j, c.sOther - this.s[j]!, c, tIn, tOut)) return false;
     return true;
@@ -438,7 +440,9 @@ export class TrafficSim {
     const sig = this.junctions.signalOf[c.other];
     if (sig && sig.state(c.other) === SIGNAL_RED) return true;
     const v = this.v[i]!, vmax = C.speedLimit * this.speedFactor[i]!;
-    const tIn = timeTo(d + c.sSelf - c.h, v, this.aMax[i]!, vmax);
+    // Earliest arrival (no slowing for the turn yet) vs latest departure (at turning speed): judging
+    // "they are through before I arrive" with a late arrival estimate would cut in front of them.
+    const tIn = timeTo(d + c.sSelf - c.h, v, this.aMax[i]!, Math.max(vmax, v));
     const tOut = timeTo(d + c.sSelf + c.h + this.length[i]!, v, this.aMax[i]!, vmax);
     for (const j of this.laneVehicles[c.other]!) {
       if (!this.clearOf(j, c.sOther - this.s[j]!, c, tIn, tOut)) return false;
@@ -520,11 +524,13 @@ export class TrafficSim {
     } else if (ctrl === 'allway') {
       if (!this.allwayClear(i, C, d)) return true;
     }
-    if (ctrl !== 'allway' && d < GAP_RANGE) {
+    // Look for gaps from before the point where stopping stops being comfortable (we commit there).
+    const gapRange = Math.max(GAP_RANGE, (this.v[i]! * this.v[i]!) / (2 * this.b[i]!) + 10);
+    if (ctrl !== 'allway' && d < gapRange) {
       for (const c of this.junctions.conflicts[C.id]!) if (c.yields && !this.gapOk(i, C, d, c)) return true;
     }
     // Vehicles already inside the junction have right of way over everyone still outside.
-    if (d < GAP_RANGE) {
+    if (d < gapRange) {
       for (const c of this.junctions.conflicts[C.id]!) if (!c.yields && !this.insidersClear(i, C, d, c)) return true;
     }
     return this.exitBlocked(i, C);

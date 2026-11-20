@@ -262,6 +262,22 @@ describe('junction scenarios (no collisions, no gridlock)', () => {
   }
 });
 
+describe('left turns', () => {
+  it('never cut in front of oncoming traffic or clip waiting cars (several seeds)', () => {
+    for (const seed of [8, 9, 11]) {
+      const sim = junction('priority', MIXED, 450, seed);
+      // Brief clips: check every other step, not every second as `run` does.
+      let collisions = 0;
+      for (let t = 0; t < 9000; t++) {
+        sim.step(DT);
+        if (t % 2 === 0) collisions += overlaps(sim);
+      }
+      expect(collisions, `seed ${seed}`).toBe(0);
+      expect(sim.stats.exited).toBeGreaterThan(300);
+    }
+  });
+});
+
 describe('test city', () => {
   it('runs deterministically, delivers vehicles and never gridlocks', () => {
     const make = () => {

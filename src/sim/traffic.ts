@@ -781,6 +781,141 @@ export class TrafficSim {
     this.stats.waiting = waiting;
   }
 
+  /**
+   * Takes over the vehicles of a simulation running on an older version of the network (after an
+   * edit), so traffic keeps flowing. Vehicles keep their slot and driver parameters and are placed
+   * on the matching lane of the new graph. Vehicles whose road is gone, or that can no longer
+   * reach any exit, are removed. Returns the number removed.
+   */
+  adopt(old: TrafficSim): number {
+    if (old.capacity !== this.capacity) throw new Error('adopt: capacity mismatch');
+    const lanes = this.graph.lanes;
+    const roadLanes = lanes.filter((l) => l.kind === 'road');
+    const scratch = new Float32Array(4);
+    const memo = new Map<number, number>();
+
+    /** New road lane at the position (x, z) of old lane `ol`, or -1. Returns [lane, s]. */
+    const mapRoad = (ol: Lane, s: number): [number, number] => {
+      ol.path.sample(s, scratch, 0);
+      const x = scratch[0]!, z = scratch[2]!;
+      const dir = ol.path.dirAt(false);
+      let best = -1, bestS = 0, bestD = Infinity;
+      // Same road and direction still there: pick the same lane index if possible.
+      const same = roadLanes.filter((l) => l.segment === ol.segment && l.fromNode === ol.fromNode && l.toNode === ol.toNode);
+      const pool = same.length > 0 ? same : roadLanes;
+      for (const l of pool) {
+        if (same.length === 0 && l.path.dirAt(false)[0] * dir[0] + l.path.dirAt(false)[2] * dir[2] < -0.5) continue;
+        const p = l.path.project(x, z);
+        const penalty = same.length > 0 ? Math.abs(l.index - ol.index) * 0.01 : 0;
+        if (p.dist + penalty < bestD) [best, bestS, bestD] = [l.id, p.s, p.dist + penalty];
+      }
+      // Same road: allow a lane's width of sideways shift (lanes removed) or a few metres past the
+      // lane end (the junction grew). Other roads (a split or redrawn road): must line up closely.
+      if (best < 0 || bestD > (same.length > 0 ? 4 : 1.2)) return [-1, 0];
+      return [best, Math.min(bestS, lanes[best]!.path.length - 0.01)];
+    };
+    const mapLaneEnd = (laneId: number, end: boolean): number => {
+      const key = laneId * 2 + (end ? 1 : 0);
+      let r = memo.get(key);
+      if (r === undefined) {
+        const ol = old.graph.lanes[laneId]!;
+        r = mapRoad(ol, end ? ol.path.length - 0.5 : 0.5)[0];
+        memo.set(key, r);
+      }
+      return r;
+    };
+
+    let dropped = 0;
+    this.freeSlots.length = 0;
+    for (let i = 0; i < this.capacity; i++) {
+      this.alive[i] = 0;
+      if (!old.alive[i]) continue;
+      const ol = old.graph.lanes[old.lane[i]!]!;
+      let lane = -1, s = 0, last = -1;
+      if (ol.kind === 'road') {
+        [lane, s] = mapRoad(ol, old.s[i]!);
+      } else {
+        // Connector: find the new connector joining the same two roads lanes.
+        const from = mapLaneEnd(ol.prev[0]!, true), to = mapLaneEnd(ol.next[0]!, false);
+        if (from >= 0 && to >= 0) {
+          const c = lanes[from]!.next.find((n) => lanes[n]!.kind === 'connector' && lanes[n]!.next[0] === to);
+          if (c !== undefined) {
+            lane = c;
+            s = Math.min((old.s[i]! / ol.path.length) * lanes[c]!.path.length, lanes[c]!.path.length - 0.01);
+            last = from;
+          }
+        }
+      }
+      if (lane >= 0) {
+        let dest = old.dest[i]!;
+        if (!Number.isFinite(this.table(dest).cost[lane]!)) {
+          dest = -1;
+          for (const sp of this.spawners) {
+            if (this.graph.sinks.has(sp.node) && Number.isFinite(this.table(sp.node).cost[lane]!)) {
+              dest = sp.node;
+              break;
+            }
+          }
+        }
+        if (dest < 0) lane = -1;
+        else this.dest[i] = dest;
+      }
+      if (lane < 0) {
+        dropped++;
+        continue;
+      }
+      this.alive[i] = 1;
+      this.lane[i] = lane;
+      this.s[i] = s;
+      this.v[i] = old.v[i]!;
+      this.acc[i] = 0;
+      for (const k of ['length', 'width', 'height', 'speedFactor', 'T', 'aMax', 'b', 's0'] as const) this[k][i] = old[k][i]!;
+      this.color[i] = old.color[i]!;
+      const onConnector = lanes[lane]!.kind === 'connector';
+      this.committed[i] = onConnector ? 1 : 0;
+      this.waiting[i] = 0;
+      this.stopTime[i] = -1;
+      this.lcCooldown[i] = old.lcCooldown[i]!;
+      this.lat[i] = 0;
+      this.fromLane[i] = -1;
+      this.lastLane[i] = last;
+      this.enterTime[i] = onConnector ? old.time : Infinity;
+      this.stuck[i] = 0;
+      this.breaking[i] = 0;
+    }
+    // Vehicles squeezed onto the same lane (e.g. a lane was removed, or a junction grew and
+    // shortened its approach) must not overlap each other, nor the tail of a vehicle that has
+    // just entered the junction from this lane.
+    this.bucket();
+    for (let id = 0; id < lanes.length; id++) {
+      const list = this.laneVehicles[id]!;
+      const len = lanes[id]!.path.length;
+      let rear = Infinity;
+      for (const c of lanes[id]!.next) {
+        for (const j of this.laneVehicles[c]!) {
+          if (this.s[j]! < this.length[j]!) rear = Math.min(rear, len + this.s[j]! - this.length[j]!);
+        }
+      }
+      for (const j of list) {
+        if (this.s[j]! > rear - 0.5) {
+          this.alive[j] = 0;
+          dropped++;
+        } else {
+          rear = this.s[j]! - this.length[j]!;
+        }
+      }
+    }
+    for (let i = this.capacity - 1; i >= 0; i--) if (!this.alive[i]) this.freeSlots.push(i);
+    this.time = old.time;
+    this.steps = old.steps;
+    Object.assign(this.stats, old.stats);
+    for (const sp of this.spawners) sp.pending = old.spawners.find((o) => o.node === sp.node)?.pending ?? 0;
+    this.bucket();
+    this.updatePoses();
+    this.prevPose.set(this.pose);
+    return dropped;
+  }
+
   step(dt: number): void {
     this.junctions.update(dt);
     this.bucket();

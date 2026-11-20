@@ -29,6 +29,7 @@ export class Renderer {
   private readonly shadows: Mesh;
   private readonly vehicles: Mesh;
   private readonly props: Mesh;
+  private readonly overlay: Mesh;
   private readonly litMeshes: Mesh[];
   private readonly reserved = new Set<Mesh>();
   private roads: Mesh | null = null;
@@ -58,7 +59,8 @@ export class Renderer {
     this.vehicles = new Mesh(gl, car.vertices, POS_NORMAL, car.indices, LIT_INSTANCE);
     const box = boxGeometry();
     this.props = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
-    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.props];
+    this.overlay = new Mesh(gl, box.vertices, POS_NORMAL, box.indices, LIT_INSTANCE);
+    this.litMeshes = [...Object.values(this.kits), this.vehicles, this.props, this.overlay];
   }
 
   /**
@@ -81,6 +83,15 @@ export class Renderer {
   /** Junction furniture (lines, poles, signs, signal lamps). */
   setProps(data: Float32Array, count: number): void {
     this.upload(this.props, data, count);
+  }
+
+  /** Editor overlay (previews, selection, snap markers); changes only when the editor does. */
+  setOverlay(data: Float32Array, count: number): void {
+    if (count === 0) {
+      this.overlay.instanceCount = 0;
+      return;
+    }
+    this.overlay.setInstances(data.subarray(0, count * LIT_STRIDE), count);
   }
 
   setZone(zone: Zone): void {

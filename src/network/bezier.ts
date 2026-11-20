@@ -39,6 +39,16 @@ export class CubicBezier {
     ];
   }
 
+  /** Splits the curve at parameter t into two curves (de Casteljau). */
+  split(t: number): [CubicBezier, CubicBezier] {
+    const l = (a: Vec3, b: Vec3): Vec3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    const { p0, p1, p2, p3 } = this;
+    const a = l(p0, p1), b = l(p1, p2), c = l(p2, p3);
+    const d = l(a, b), e = l(b, c);
+    const m = l(d, e);
+    return [new CubicBezier(p0, a, d, m), new CubicBezier(m, e, c, p3)];
+  }
+
   /** First derivative (not normalized). */
   derivative(t: number): Vec3 {
     const u = 1 - t;

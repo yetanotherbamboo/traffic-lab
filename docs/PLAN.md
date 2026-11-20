@@ -131,7 +131,7 @@ Key principles:
 We go milestone by milestone. At the end of each, tests and the build run, the result is checked on a phone, and the work is committed.
 
 ## Progress
-_Last updated: 2026-11-19_
+_Last updated: 2026-11-20_
 
 ### Done
 - [x] **0. Environment setup:** Node via nvm, Vite + TS (strict) + Vitest, git. Verified on laptop and phone.
@@ -163,21 +163,48 @@ _Last updated: 2026-11-19_
   - **Visuals:** traffic lights whose lamps change colour, stop signs, stop and give-way lines. Vehicles are now rendered centred, with heading taken from a trailing rear point.
   - **Stress check:** 4 junction types × 5 seeds, plus the city at 1× and 1.5× demand. At nominal demand there were no deadlocks and essentially no overlaps (one sample in one T-junction seed).
   - **Status:** awaiting phone check.
+- [x] **5. Editor (touch-first):**
+  - **Tools** (toolbar at the bottom; two fingers always move the camera):
+    - **Road:** drag from one point to another. Ends snap to junctions and road ends, onto the middle of a road (which makes a T-junction), or to free points on 15° steps and whole metres. Crossing a road creates a junction. Presets: Street 1+1, Avenue 2+2, One-way 2, Boulevard 3+3.
+    - **Bend:** drag the handle in the middle of a road.
+    - **Edit:** tap a road for lanes per direction, speed limit and swapping directions. Tap a junction for its control (priority, all-way stop or signals), main road, green time per phase, and turn lanes per approach lane (auto, ←, ↑, →, or combinations).
+    - **Remove:** tap a road.
+    - **Undo/redo:** snapshot history (network, demolished items, money spent), 100 steps; Ctrl/Cmd+Z on desktop.
+  - **Preview while dragging:**
+    - The real road mesh is rebuilt live, so junctions form under the finger.
+    - A green or red centreline shows the new road, with the reason when it's invalid.
+    - The preview shows cost, and red outlines mark buildings and trees that would be demolished.
+  - **Validation** (`src/editor/validate.ts`): stay inside the construction zone, minimum road length between junctions, minimum angle between roads (25°), at most 6 roads per junction, minimum curve radius, no overlap with roads it doesn't connect to.
+  - **Construction zone:** roads crossing its border are split there at startup (`splitAtZone`). Inside is editable; outside is fixed context. Spawners stay at the original scene exits.
+  - **Live rebuild:** an edit rebuilds the lane graph and junction model, and `TrafficSim.adopt` carries the running vehicles over by matching lanes. Only vehicles whose road disappeared are removed; nothing restarts. A commit takes about 10–20 ms.
+  - **Demolition:** buildings, parks and trees under new roads or new junction areas sink into the ground. Prices are placeholders (k€) until Milestone 7; the HUD shows money spent.
+  - **Network changes:**
+    - Lane-count changes at a straight 2-road node now make a small junction: a tapered surface (fixes the old seam), and merge conflicts where the outer lane gives way.
+    - Opposite junction arms get a straight kerb, so the flat side of a T no longer bulges.
+    - Turn arrows are painted on all approach lanes of real junctions.
+  - **Code:**
+    - `src/editor/` (rules, pick, snap, ops, validate, cost, editor) is DOM-free and tested in `tests/editor.test.ts`.
+    - `src/game/world.ts` holds the live state.
+    - `src/ui/` holds the HTML toolbar, panels and overlay content. `src/render/overlay.ts` adds 1 draw call.
+  - **Checks:** a headless browser run showed drawing, junction panel, signals, turn lanes, bend, remove and undo working. Traffic after a crossing street, a lane drop and a road removal kept flowing, with no new overlaps.
+  - **Status:** awaiting phone check.
 
 ### Next
-- [ ] **5. Editor (touch-first).**
+- [ ] **6. Elevation: overpasses, bridges, tunnels.**
 
 ### Known issues / tech debt
 - **Junction sizing:** `RoadNetwork.junctionRadius` is a heuristic sized for roughly perpendicular crossings. Acute angles can make corners overlap.
-- **Straight 2-road nodes:** they aren't treated as junctions, so joining two different lane profiles there leaves a visible seam.
-- **Dead ends:** roads have no end caps.
+- **Dead ends:** roads have no end caps. Vehicles that end up on a player-made dead end (only via a forced fallback move) are removed there; there are no U-turns.
 - **Junction markings:** there are no stop lines or crosswalks yet.
 - **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.
-- **Demolition:** construction-zone lots are flagged (`Lot.inZone`), but demolition cost and the sink animation are deferred to the editor (Milestone 5).
+- **Demolished lots stay empty:** removing a road doesn't regrow buildings.
+- **No node dragging:** junctions can't be moved yet; delete and redraw instead. Leftover straight 2-road nodes (after deleting a crossing road) aren't merged back.
+- **Acute junction corners:** validation rejects angles under 25°, but roads meeting at 25–40° can still show overlapping sidewalk corners.
+- **Lane-mapping on edits:** vehicles inside a junction whose connector no longer exists are removed rather than re-routed.
+- **Preview cost on phones:** each drag move clones the network, validates and rebuilds the road mesh, about 3 ms on a laptop. Watch for lag on the phone.
 - **Deadlock breaker:** when it fires, a stuck vehicle creeps through, which can cause a brief visual overlap. This is rare at nominal demand and more frequent when the network is oversaturated (1.5× demand: a few samples per 20 minutes).
-- **Fixed signal timings:** green time is 10 s + 8 s per lane, with no actuation or protected left phases yet. Configurable in the editor (Milestone 5).
+- **Signal timings:** green time defaults to 10 s + 8 s per lane and can be changed per phase in the editor. No actuation or protected left phases yet.
 - **Free-flow routing:** routes use free-flow time only, so vehicles don't avoid congestion. Dynamic rerouting is a candidate for Milestone 7/8.
 - **Spawn queues:** a blocked entry lane delays spawns (pending capped at 20); this isn't measured yet.
 - **City generation speed:** it runs on the main thread at startup (time shown in the HUD). Move it to a worker if it grows.
 - **Unconfirmed control:** the mouse right-drag rotate direction hasn't been checked by the user.
-- **Hand-ordered arms:** junction arms are ordered by angle. Overlapping or self-intersecting roads aren't validated (an editor milestone task).

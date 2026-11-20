@@ -35,6 +35,21 @@ export class Path {
     return [dx / l, 0, dz / l];
   }
 
+  /** Closest point on the path to (x, z) in the ground plane: arc length and distance. */
+  project(x: number, z: number): { s: number; dist: number } {
+    const pts = this.pts, cum = this.cum;
+    let bestS = 0, bestD = Infinity;
+    for (let i = 0; i + 1 < cum.length; i++) {
+      const ax = pts[i * 3]!, az = pts[i * 3 + 2]!;
+      const dx = pts[i * 3 + 3]! - ax, dz = pts[i * 3 + 5]! - az;
+      const l2 = dx * dx + dz * dz;
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / l2)) : 0;
+      const d = Math.hypot(x - (ax + dx * t), z - (az + dz * t));
+      if (d < bestD) [bestD, bestS] = [d, cum[i]! + t * (cum[i + 1]! - cum[i]!)];
+    }
+    return { s: bestS, dist: bestD };
+  }
+
   /**
    * Writes [x, y, z, heading] at arc length s into `out` (offset `o`).
    * Heading follows the instance-rotation convention: atan2(-dz, dx).

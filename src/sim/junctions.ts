@@ -10,6 +10,9 @@ const MERGE_DIST = 2.3; // merging paths closer than this share the zone
 const YELLOW = 3;
 const ALL_RED = 2;
 
+/** Default green time (s) for an approach with `lanes` lanes. */
+export const defaultGreen = (lanes: number): number => 10 + 8 * lanes;
+
 export const SIGNAL_GREEN = 0;
 export const SIGNAL_YELLOW = 1;
 export const SIGNAL_RED = 2;
@@ -172,12 +175,20 @@ export class JunctionModel {
 
     for (const [nodeId, conns] of byNode) {
       const node = net.node(nodeId);
-      if (node.segments.length < 3) continue; // bends: no crossing traffic
-      const control = node.control ?? 'priority';
-      this.control.set(nodeId, control);
-      this.incoming.set(nodeId, [...new Set(conns.map((c) => c.prev[0]!))]);
-      if (control === 'priority') this.major.set(nodeId, this.majorRoad(nodeId));
-      if (control === 'signal') this.buildSignal(nodeId, conns);
+      if (node.segments.length < 3) {
+        // Bends and lane-count changes: no crossing traffic, but dropped lanes merge.
+        const merges = conns.some((a) => conns.some((b) => a !== b && a.next[0] === b.next[0]));
+        if (!merges) continue;
+        this.control.set(nodeId, 'priority');
+        this.incoming.set(nodeId, [...new Set(conns.map((c) => c.prev[0]!))]);
+        this.major.set(nodeId, new Set(node.segments));
+      } else {
+        const control = node.control ?? 'priority';
+        this.control.set(nodeId, control);
+        this.incoming.set(nodeId, [...new Set(conns.map((c) => c.prev[0]!))]);
+        if (control === 'priority') this.major.set(nodeId, this.majorRoad(nodeId));
+        if (control === 'signal') this.buildSignal(nodeId, conns);
+      }
 
       for (let x = 0; x < conns.length; x++) {
         for (let y = x + 1; y < conns.length; y++) this.addConflict(nodeId, conns[x]!, conns[y]!);
@@ -187,6 +198,8 @@ export class JunctionModel {
 
   /** The two arms with the highest capacity (preferring a straight-through pair) form the main road. */
   private majorRoad(nodeId: number): Set<number> {
+    const chosen = this.graph.net.node(nodeId).major;
+    if (chosen && chosen.every((s) => this.graph.net.node(nodeId).segments.includes(s))) return new Set(chosen);
     const arms = this.graph.net.arms(nodeId);
     const rank = (i: number): number => {
       const p = arms[i]!.segment.profile;
@@ -225,11 +238,12 @@ export class JunctionModel {
         used.add(opp);
         group.push(opp);
       }
-      const maxLanes = Math.max(...group.map((g) => armLanes.get(g)!));
+      const greens = this.graph.net.node(nodeId).greens ?? {};
+      const green = Math.max(...group.map((g) => greens[g] ?? defaultGreen(armLanes.get(g)!)));
       phases.push({
         arms: group,
         connectors: conns.filter((c) => group.includes(lanes[c.prev[0]!]!.segment)).map((c) => c.id),
-        green: 10 + 8 * maxLanes,
+        green,
       });
     }
     const ctrl = new SignalController(nodeId, phases);
@@ -248,7 +262,10 @@ export class JunctionModel {
     const ra = TURN_RANK[a.turn ?? 'straight'], rb = TURN_RANK[b.turn ?? 'straight'];
     if (ra !== rb) return ra < rb;
     // Same rank: give way to traffic coming from the right.
-    return vec3.dot(b.path.dirAt(false), rightOf(a.path.dirAt(false))) < -0.3;
+    const side = vec3.dot(b.path.dirAt(false), rightOf(a.path.dirAt(false)));
+    if (Math.abs(side) > 0.3 || a.next[0] !== b.next[0]) return side < -0.3;
+    // Side-by-side lanes merging into one (lane drop): the lane further out gives way.
+    return a.index !== b.index ? a.index > b.index : a.id > b.id;
   }
 
   private addConflict(nodeId: number, a: Lane, b: Lane): void {

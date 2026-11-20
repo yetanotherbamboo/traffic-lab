@@ -126,6 +126,12 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
 
   let gap = c.angle - a.angle;
   if (gap <= 0) gap += Math.PI * 2;
+  if (vec3.dot(a.dir, c.dir) < -0.985) {
+    // Opposite arms (straight through side of a T, or a lane-count change): a straight kerb.
+    const pts: Vec3[] = [];
+    for (let k = 0; k <= samples; k++) pts.push(vec3.add(P, vec3.scale(vec3.sub(Q, P), k / samples)));
+    return pts;
+  }
   if (gap > Math.PI - 0.05) {
     // Wide (reflex) gap: sweep an arc around the node so the surface stays convex around the centre.
     const ang = (p: Vec3): number => Math.atan2(p[2] - centre[2], p[0] - centre[0]);

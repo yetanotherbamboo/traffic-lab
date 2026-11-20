@@ -1,6 +1,8 @@
 import { type Vec3, vec3 } from '../core/math';
 import { CubicBezier } from '../network/bezier';
-import { type RoadNetwork, horizontal, rightOf } from '../network/network';
+import {
+  type RoadNetwork, TURN_LEFT, TURN_RIGHT, TURN_STRAIGHT, horizontal, rightOf,
+} from '../network/network';
 import { Path } from './path';
 
 const LANE_Y = 0.03; // road surface lift (matches roadMesh LIFT)
@@ -8,6 +10,7 @@ const MAX_LAT_ACCEL = 3.0; // m/s², comfortable cornering
 const STRAIGHT_COS = Math.cos((35 * Math.PI) / 180);
 
 export type Turn = 'straight' | 'left' | 'right';
+export const TURN_BIT: Record<Turn, number> = { left: TURN_LEFT, straight: TURN_STRAIGHT, right: TURN_RIGHT };
 
 export interface Lane {
   id: number;
@@ -152,13 +155,33 @@ export class LaneGraph {
       inLanes.forEach((l, i) => this.link(node, l, outLanes[Math.min(i, m - 1)]!, junction, turn));
       return;
     }
-    inLanes.forEach((l, i) => {
-      const allowed = n === 1 || turn === 'straight'
-        || (turn === 'left' && i === 0)
-        || (turn === 'right' && (hasStraight ? i === n - 1 : i > 0));
-      if (!allowed) return;
-      const target = turn === 'left' ? outLanes[0]! : turn === 'right' ? outLanes[m - 1]! : outLanes[Math.min(i, m - 1)]!;
-      this.link(node, l, target, junction, turn);
+    // Lane-use overrides set in the editor (per lane arriving at this node).
+    const seg = this.net.segments.get(inLanes[0]!.segment)!;
+    const masks = seg.b === node ? seg.turnsB : seg.turnsA;
+    const custom = masks?.some((mk, i) => i < n && mk > 0) ?? false;
+    const auto = (i: number): boolean => n === 1 || turn === 'straight'
+      || (turn === 'left' && i === 0)
+      || (turn === 'right' && (hasStraight ? i === n - 1 : i > 0));
+    if (!custom) {
+      inLanes.forEach((l, i) => {
+        if (!auto(i)) return;
+        const target = turn === 'left' ? outLanes[0]! : turn === 'right' ? outLanes[m - 1]! : outLanes[Math.min(i, m - 1)]!;
+        this.link(node, l, target, junction, turn);
+      });
+      return;
+    }
+    const bit = TURN_BIT[turn];
+    const allowed = inLanes.filter((_, i) => {
+      const mk = masks![i] ?? 0;
+      return mk > 0 ? (mk & bit) !== 0 : auto(i);
+    });
+    const k = allowed.length;
+    allowed.forEach((l, j) => {
+      // Left turns fill exit lanes from the inside, right turns from the kerb, straight spreads evenly.
+      const o = turn === 'left' ? Math.min(j, m - 1)
+        : turn === 'right' ? m - 1 - Math.min(k - 1 - j, m - 1)
+          : k <= 1 ? 0 : Math.round((j * (m - 1)) / (k - 1));
+      this.link(node, l, outLanes[Math.max(0, Math.min(o, m - 1))]!, junction, turn);
     });
   }
 

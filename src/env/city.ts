@@ -29,8 +29,30 @@ export interface Lot {
   inZone: boolean;
 }
 
+/**
+ * Something on the ground that a new road can demolish: a lot (building or park) or a tree,
+ * with the instance ranges it occupies in the kit and shadow buffers.
+ */
+export interface CityItem {
+  id: number;
+  kind: LotKind | 'tree';
+  /** Footprint: the lot rectangle, or a tree's centre and radius. */
+  lot: Lot | null;
+  x: number;
+  z: number;
+  r: number;
+  /** Top of the tallest instance (m), for the sink animation. */
+  top: number;
+  ranges: { kit: KitName; start: number; count: number }[];
+  shadow: { start: number; count: number };
+}
+
 export interface City {
   lots: Lot[];
+  items: CityItem[];
+  /** Instance data as generated; `kits` / `shadows` are the live copies with demolition applied. */
+  baseKits: Record<KitName, Float32Array>;
+  baseShadows: Float32Array;
   kits: Record<KitName, Float32Array>;
   shadows: Float32Array;
 }
@@ -62,6 +84,8 @@ function distToSegment(px: number, pz: number, c: Corridor): number {
   const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - c.ax) * dx + (pz - c.az) * dz) / len2)) : 0;
   return Math.hypot(px - (c.ax + dx * t), pz - (c.az + dz * t));
 }
+
+export type MaskPart = 'all' | 'roads' | 'junctions';
 
 /** Answers "is this ground point on a road / junction?" quickly via a spatial hash. */
 class RoadMask {
@@ -101,13 +125,20 @@ class RoadMask {
     }
   }
 
-  /** True if (x,z) is within `extra` metres of road clearance. `ignoreSeg` skips one road. */
-  blocked(x: number, z: number, extra = 0, ignoreSeg = -1): boolean {
-    const list = this.cells.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`);
-    if (list) {
-      for (const c of list) if (c.seg !== ignoreSeg && distToSegment(x, z, c) < c.r + extra) return true;
+  /**
+   * True if (x,z) is within `extra` metres of road clearance. `ignoreSeg` skips one road; `use`
+   * limits the test to road corridors or junction areas.
+   */
+  blocked(x: number, z: number, extra = 0, ignoreSeg = -1, use: MaskPart = 'all'): boolean {
+    if (use !== 'junctions') {
+      const list = this.cells.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`);
+      if (list) {
+        for (const c of list) if (c.seg !== ignoreSeg && distToSegment(x, z, c) < c.r + extra) return true;
+      }
     }
-    for (const [dx, dz, r] of this.disks) if (Math.hypot(x - dx, z - dz) < r + extra) return true;
+    if (use !== 'roads') {
+      for (const [dx, dz, r] of this.disks) if (Math.hypot(x - dx, z - dz) < r + extra) return true;
+    }
     return false;
   }
 }
@@ -138,9 +169,37 @@ export function pointInLot(l: Lot, x: number, z: number, pad = 0): boolean {
   return Math.abs(dx * ax[0] + dz * ax[1]) <= l.hx + pad && Math.abs(dx * az[0] + dz * az[1]) <= l.hz + pad;
 }
 
+const KIT_NAMES: KitName[] = ['box', 'roof', 'crown', 'cone'];
+
 class Emitter {
   readonly kits: Record<KitName, number[]> = { box: [], roof: [], crown: [], cone: [] };
   readonly shadows: number[] = [];
+  readonly items: CityItem[] = [];
+  private mark: { kits: Record<KitName, number>; shadows: number } | null = null;
+
+  /** Starts recording the instances of one demolishable item. */
+  begin(): void {
+    const kits = {} as Record<KitName, number>;
+    for (const k of KIT_NAMES) kits[k] = this.kits[k].length;
+    this.mark = { kits, shadows: this.shadows.length };
+  }
+
+  end(kind: CityItem['kind'], lot: Lot | null, x: number, z: number, r: number): void {
+    const m = this.mark!;
+    const ranges: CityItem['ranges'] = [];
+    let top = 0;
+    for (const k of KIT_NAMES) {
+      const start = m.kits[k] / LIT_STRIDE, count = (this.kits[k].length - m.kits[k]) / LIT_STRIDE;
+      if (count === 0) continue;
+      ranges.push({ kit: k, start, count });
+      for (let i = start; i < start + count; i++) {
+        top = Math.max(top, this.kits[k][i * LIT_STRIDE + 1]! + this.kits[k][i * LIT_STRIDE + 5]!);
+      }
+    }
+    const shadow = { start: m.shadows / SHADOW_STRIDE, count: (this.shadows.length - m.shadows) / SHADOW_STRIDE };
+    this.items.push({ id: this.items.length, kind, lot, x, z, r, top, ranges, shadow });
+    this.mark = null;
+  }
 
   lit(kit: KitName, p: Vec3, angle: number, scale: Vec3, color: Vec3, kind = KIND_PLAIN): void {
     this.kits[kit].push(p[0], p[1], p[2], angle, scale[0], scale[1], scale[2], color[0], color[1], color[2], kind);
@@ -262,7 +321,9 @@ export function generateCity(net: RoadNetwork, zone: Zone, seed: number): City {
         };
         if (visible(cx, cz, 10) && lotFree(lot)) {
           lots.push(lot);
+          e.begin();
           emitLot(e, rng, lot, [-r[0] * side, -r[2] * side]);
+          e.end(lot.kind, lot, cx, cz, Math.hypot(lot.hx, lot.hz));
           s += f + rng.range(0.5, 3);
         } else {
           s += 3;
@@ -285,7 +346,9 @@ export function generateCity(net: RoadNetwork, zone: Zone, seed: number): City {
         const r = rightOf(horizontal(seg.curve.derivative(t)));
         const x = p[0] + r[0] * side * off, z = p[2] + r[2] * side * off;
         if (!visible(x, z) || mask.blocked(x, z, 0, seg.id)) continue;
+        e.begin();
         emitTree(e, rng, x, z, 0.18, true);
+        e.end('tree', null, x, z, 1.6);
       }
     }
   }
@@ -298,18 +361,73 @@ export function generateCity(net: RoadNetwork, zone: Zone, seed: number): City {
       if (!rng.chance(0.42) || !visible(px, pz)) continue;
       if (mask.blocked(px, pz, 1.5)) continue;
       if (lots.some((l) => pointInLot(l, px, pz, 1.5))) continue;
+      e.begin();
       emitTree(e, rng, px, pz, 0);
+      e.end('tree', null, px, pz, 2);
     }
   }
 
-  return {
-    lots,
-    kits: {
-      box: new Float32Array(e.kits.box),
-      roof: new Float32Array(e.kits.roof),
-      crown: new Float32Array(e.kits.crown),
-      cone: new Float32Array(e.kits.cone),
-    },
-    shadows: new Float32Array(e.shadows),
+  const baseKits = {} as Record<KitName, Float32Array>;
+  const kits = {} as Record<KitName, Float32Array>;
+  for (const k of KIT_NAMES) {
+    baseKits[k] = new Float32Array(e.kits[k]);
+    kits[k] = baseKits[k].slice();
+  }
+  const baseShadows = new Float32Array(e.shadows);
+  return { lots, items: e.items, baseKits, baseShadows, kits, shadows: baseShadows.slice() };
+}
+
+/**
+ * Items inside the construction zone that the roads of `net` run over (to be demolished).
+ * Lots are tested on a 5×5 grid of points, trees at their centre plus radius.
+ */
+export function itemsHitByRoads(city: City, net: RoadNetwork, zone: Zone, use: MaskPart = 'all'): number[] {
+  const mask = new RoadMask(net, 0.3);
+  const out: number[] = [];
+  for (const it of city.items) {
+    if (zoneDistance(zone, it.x, it.z) > it.r) continue;
+    if (it.lot) {
+      const [ax, az] = lotAxes(it.lot.angle);
+      let hit = false;
+      for (let i = 0; i <= 4 && !hit; i++) {
+        for (let j = 0; j <= 4 && !hit; j++) {
+          const u = (i / 4 - 0.5) * 2 * it.lot.hx, v = (j / 4 - 0.5) * 2 * it.lot.hz;
+          hit = mask.blocked(it.lot.cx + ax[0] * u + az[0] * v, it.lot.cz + ax[1] * u + az[1] * v, -1, -1, use);
+        }
+      }
+      if (hit) out.push(it.id);
+    } else if (mask.blocked(it.x, it.z, 0.5, -1, use)) {
+      out.push(it.id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Rewrites the live instance buffers from the base ones: demolished items vanish, sinking items
+ * (id → progress 0..1) are lowered into the ground with their shadows fading.
+ */
+export function applyDemolition(city: City, demolished: ReadonlySet<number>, sinking: ReadonlyMap<number, number>): void {
+  for (const k of KIT_NAMES) city.kits[k].set(city.baseKits[k]);
+  city.shadows.set(city.baseShadows);
+  const touch = (id: number, progress: number): void => {
+    const it = city.items[id];
+    if (!it) return;
+    for (const r of it.ranges) {
+      const buf = city.kits[r.kit];
+      for (let i = r.start; i < r.start + r.count; i++) {
+        const o = i * LIT_STRIDE;
+        if (progress >= 1) {
+          buf[o + 4] = 0; buf[o + 5] = 0; buf[o + 6] = 0;
+        } else {
+          buf[o + 1] = buf[o + 1]! - it.top * progress * progress;
+        }
+      }
+    }
+    for (let i = it.shadow.start; i < it.shadow.start + it.shadow.count; i++) {
+      const o = i * SHADOW_STRIDE + 7;
+      city.shadows[o] = city.shadows[o]! * Math.max(0, 1 - progress);
+    }
   };
+  for (const id of demolished) touch(id, sinking.get(id) ?? 1);
 }

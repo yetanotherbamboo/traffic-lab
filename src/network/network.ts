@@ -16,12 +16,21 @@ export interface LaneProfile {
 /** How a junction is controlled. 'priority' = main road has right of way, side roads give way. */
 export type JunctionControl = 'priority' | 'allway' | 'signal';
 
+/** Turn bits for lane-use overrides (`RoadSegment.turnsA/B`). 0 = automatic rules. */
+export const TURN_LEFT = 1;
+export const TURN_STRAIGHT = 2;
+export const TURN_RIGHT = 4;
+
 export interface RoadNode {
   id: number;
   pos: Vec3;
   segments: number[];
   /** Junction control; defaults to 'priority' at junctions with 3+ roads. */
   control?: JunctionControl;
+  /** Priority junctions: the two segments forming the main road (default: chosen automatically). */
+  major?: [number, number];
+  /** Signal junctions: green time (s) per incoming segment id; a phase uses the max of its arms. */
+  greens?: Record<number, number>;
 }
 
 export interface RoadSegment {
@@ -30,6 +39,21 @@ export interface RoadSegment {
   b: number;
   curve: CubicBezier;
   profile: LaneProfile;
+  /**
+   * Allowed turns per lane arriving at node a / node b, indexed by lane index (0 = innermost),
+   * as TURN_* bit masks. Missing or 0 entries use the automatic lane-use rules.
+   */
+  turnsA?: number[];
+  turnsB?: number[];
+}
+
+/** Plain-data form of a network (levels, undo snapshots). */
+export interface NetworkData {
+  nextId: number;
+  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number> }[];
+  segments: {
+    id: number; a: number; b: number; c1: Vec3; c2: Vec3; profile: LaneProfile; turnsA?: number[]; turnsB?: number[];
+  }[];
 }
 
 /** One road leaving a node, described in an outward-facing frame. */
@@ -58,7 +82,7 @@ export class RoadNetwork {
 
   addNode(pos: Vec3): number {
     const id = this.nextId++;
-    this.nodes.set(id, { id, pos, segments: [] });
+    this.nodes.set(id, { id, pos: [pos[0], pos[1], pos[2]], segments: [] });
     return id;
   }
 
@@ -67,7 +91,7 @@ export class RoadNetwork {
     const na = this.node(a), nb = this.node(b);
     const curve = c1 && c2 ? new CubicBezier(na.pos, c1, c2, nb.pos) : CubicBezier.line(na.pos, nb.pos);
     const id = this.nextId++;
-    this.segments.set(id, { id, a, b, curve, profile });
+    this.segments.set(id, { id, a, b, curve, profile: { ...profile } });
     na.segments.push(id);
     nb.segments.push(id);
     return id;
@@ -79,6 +103,120 @@ export class RoadNetwork {
     return n;
   }
 
+  segment(id: number): RoadSegment {
+    const s = this.segments.get(id);
+    if (!s) throw new Error(`No segment ${id}`);
+    return s;
+  }
+
+  /** The node at the other end of a segment. */
+  otherEnd(seg: RoadSegment, nodeId: number): number {
+    return seg.a === nodeId ? seg.b : seg.a;
+  }
+
+  /** Removes a road; nodes left without roads are removed too. Junction settings are tidied. */
+  removeSegment(id: number): void {
+    const seg = this.segment(id);
+    this.segments.delete(id);
+    for (const nid of [seg.a, seg.b]) {
+      const n = this.nodes.get(nid);
+      if (!n) continue;
+      n.segments = n.segments.filter((s) => s !== id);
+      if (n.major?.includes(id)) delete n.major;
+      if (n.greens) delete n.greens[id];
+      if (n.segments.length === 0) this.nodes.delete(nid);
+    }
+  }
+
+  /** Replaces the shape of a road, keeping its end nodes. */
+  setCurve(id: number, c1: Vec3, c2: Vec3): void {
+    const seg = this.segment(id);
+    seg.curve = new CubicBezier(this.node(seg.a).pos, c1, c2, this.node(seg.b).pos);
+  }
+
+  /**
+   * Splits a road at curve parameter t by inserting a node there. Both halves keep the profile;
+   * lane-use overrides and junction settings stay with the end they belong to. Returns the new node.
+   */
+  splitSegment(id: number, t: number, atNode?: number): { node: number; first: number; second: number } {
+    const seg = this.segment(id);
+    const [c0, c1] = seg.curve.split(t);
+    // Optionally split at an existing node lying (almost) on the curve: nudge the halves onto it.
+    const mid = atNode ?? this.addNode(c0.p3);
+    const m = this.node(mid).pos;
+    const off = vec3.sub(m, c0.p3);
+    const first = this.addSegment(seg.a, mid, seg.profile, c0.p1, vec3.add(c0.p2, off));
+    const second = this.addSegment(mid, seg.b, seg.profile, vec3.add(c1.p1, off), c1.p2);
+    if (seg.turnsA) this.segment(first).turnsA = [...seg.turnsA];
+    if (seg.turnsB) this.segment(second).turnsB = [...seg.turnsB];
+    const rename = (nodeId: number, to: number): void => {
+      const n = this.node(nodeId);
+      n.segments = n.segments.filter((s) => s !== id && s !== to);
+      n.segments.push(to);
+      if (n.major) n.major = n.major.map((s) => (s === id ? to : s)) as [number, number];
+      if (n.greens && n.greens[id] !== undefined) {
+        n.greens[to] = n.greens[id]!;
+        delete n.greens[id];
+      }
+    };
+    rename(seg.a, first);
+    rename(seg.b, second);
+    this.segments.delete(id);
+    return { node: mid, first, second };
+  }
+
+  toData(): NetworkData {
+    return {
+      nextId: this.nextId,
+      nodes: [...this.nodes.values()].map((n) => ({
+        id: n.id, pos: [...n.pos] as Vec3,
+        ...(n.control ? { control: n.control } : {}),
+        ...(n.major ? { major: [...n.major] as [number, number] } : {}),
+        ...(n.greens ? { greens: { ...n.greens } } : {}),
+      })),
+      segments: [...this.segments.values()].map((s) => ({
+        id: s.id, a: s.a, b: s.b, c1: [...s.curve.p1] as Vec3, c2: [...s.curve.p2] as Vec3, profile: { ...s.profile },
+        ...(s.turnsA ? { turnsA: [...s.turnsA] } : {}),
+        ...(s.turnsB ? { turnsB: [...s.turnsB] } : {}),
+      })),
+    };
+  }
+
+  static fromData(d: NetworkData): RoadNetwork {
+    const net = new RoadNetwork();
+    for (const n of d.nodes) {
+      const node: RoadNode = { id: n.id, pos: [...n.pos] as Vec3, segments: [] };
+      if (n.control) node.control = n.control;
+      if (n.major) node.major = [...n.major];
+      if (n.greens) node.greens = { ...n.greens };
+      net.nodes.set(n.id, node);
+    }
+    for (const s of d.segments) {
+      const na = net.node(s.a), nb = net.node(s.b);
+      const seg: RoadSegment = {
+        id: s.id, a: s.a, b: s.b, profile: { ...s.profile },
+        curve: new CubicBezier(na.pos, [...s.c1] as Vec3, [...s.c2] as Vec3, nb.pos),
+      };
+      if (s.turnsA) seg.turnsA = [...s.turnsA];
+      if (s.turnsB) seg.turnsB = [...s.turnsB];
+      net.segments.set(s.id, seg);
+      na.segments.push(s.id);
+      nb.segments.push(s.id);
+    }
+    net.nextId = d.nextId;
+    return net;
+  }
+
+  clone(): RoadNetwork {
+    return RoadNetwork.fromData(this.toData());
+  }
+
+  /** Lanes arriving at / leaving a node along a segment. */
+  lanesAt(seg: RoadSegment, nodeId: number): { incoming: number; outgoing: number } {
+    const { forward, backward } = seg.profile;
+    return seg.b === nodeId ? { incoming: forward, outgoing: backward } : { incoming: backward, outgoing: forward };
+  }
+
   /** Untrimmed horizontal direction of a segment leaving the node. */
   private leaveDir(seg: RoadSegment, nodeId: number): Vec3 {
     const d = horizontal(seg.curve.derivative(seg.a === nodeId ? 0 : 1));
@@ -86,16 +224,22 @@ export class RoadNetwork {
   }
 
   /**
-   * Nodes that need their own surface: 3+ roads, or 2 roads meeting at an angle
-   * (a straight 2-road node is just a seamless continuation).
+   * Nodes that need their own surface: 3+ roads, 2 roads meeting at an angle, or 2 roads with
+   * different cross-sections (lanes are added or dropped there). A straight 2-road node with the
+   * same cross-section is just a seamless continuation.
    */
   isJunction(nodeId: number): boolean {
     const segs = this.node(nodeId).segments;
     if (segs.length >= 3) return true;
     if (segs.length < 2) return false;
-    const d0 = this.leaveDir(this.segments.get(segs[0]!)!, nodeId);
-    const d1 = this.leaveDir(this.segments.get(segs[1]!)!, nodeId);
-    return vec3.dot(d0, d1) > -0.985; // more than ~10° away from a straight continuation
+    const s0 = this.segments.get(segs[0]!)!, s1 = this.segments.get(segs[1]!)!;
+    const d0 = this.leaveDir(s0, nodeId);
+    const d1 = this.leaveDir(s1, nodeId);
+    if (vec3.dot(d0, d1) > -0.985) return true; // more than ~10° away from a straight continuation
+    const l0 = this.lanesAt(s0, nodeId), l1 = this.lanesAt(s1, nodeId);
+    const p0 = s0.profile, p1 = s1.profile;
+    return l0.incoming !== l1.outgoing || l0.outgoing !== l1.incoming
+      || p0.laneWidth !== p1.laneWidth || p0.sidewalk !== p1.sidewalk;
   }
 
   /**

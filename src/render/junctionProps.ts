@@ -49,10 +49,10 @@ export class JunctionProps {
       }
       for (const [seg, laneIds] of arms) {
         const minor = control === 'priority' && !major?.has(seg);
-        if (control === 'priority' && !minor) continue;
+        const lines = control !== 'priority' || minor;
 
         // Lines across every incoming lane: solid stop line, or dashed give-way line.
-        for (const id of laneIds) {
+        for (const id of lines ? laneIds : []) {
           const l = graph.lanes[id]!;
           const end = l.path.point(l.path.count - 1), dir = l.path.dirAt(true), r = rightOf(dir);
           const h = Math.atan2(-dir[2], dir[0]);
@@ -66,7 +66,43 @@ export class JunctionProps {
             }
           }
         }
-        if (minor) continue;
+        // Turn arrows painted on every approach lane of a real junction (3+ roads).
+        if (graph.net.node(nodeId).segments.length >= 3) {
+          for (const id of laneIds) {
+            const l = graph.lanes[id]!;
+            if (l.path.length < 14) continue;
+            const turns = new Set(l.next.map((n) => graph.lanes[n]!.turn ?? 'straight'));
+            const end = l.path.point(l.path.count - 1), dir = l.path.dirAt(true), r = rightOf(dir);
+            const at = (f: number, u: number): Vec3 => [end[0] - dir[0] * (8 - f) + r[0] * u, ROAD_Y, end[2] - dir[2] * (8 - f) + r[2] * u];
+            const seg = (a: Vec3, b: Vec3, w: number): void => {
+              const dx = b[0] - a[0], dz = b[2] - a[2];
+              box([(a[0] + b[0]) / 2, ROAD_Y, (a[2] + b[2]) / 2], Math.atan2(-dz, dx), [Math.hypot(dx, dz) + w * 0.5, 0.02, w], PAINT);
+            };
+            const head = (tip: Vec3, from: Vec3): void => {
+              const dx = tip[0] - from[0], dz = tip[2] - from[2], len = Math.hypot(dx, dz) || 1;
+              const ux = dx / len, uz = dz / len;
+              for (const sgn of [1, -1]) {
+                const c = Math.cos(0.6), sn = Math.sin(0.6) * sgn;
+                const bx = -(ux * c - uz * sn), bz = -(uz * c + ux * sn); // rotated back-pointing
+                seg(tip, [tip[0] + bx * 0.75, 0, tip[2] + bz * 0.75], 0.16);
+              }
+            };
+            const base = at(0, 0), fork = at(1.8, 0);
+            seg(base, fork, 0.18);
+            if (turns.has('straight')) {
+              const tip = at(3.6, 0);
+              seg(fork, tip, 0.18);
+              head(tip, fork);
+            }
+            for (const [t, u] of [['left', -1], ['right', 1]] as const) {
+              if (!turns.has(t)) continue;
+              const tip = at(2.9, u * 1.0);
+              seg(fork, tip, 0.18);
+              head(tip, fork);
+            }
+          }
+        }
+        if (!lines || minor) continue;
 
         // Pole on the kerb next to the outermost lane.
         const kerb = laneIds.map((id) => graph.lanes[id]!).reduce((a, b) => (b.index > a.index ? b : a));

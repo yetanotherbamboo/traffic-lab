@@ -8,6 +8,25 @@ interface Pt {
 }
 
 /**
+ * Hooks for an editing tool. Screen coordinates are CSS pixels (clientX/Y).
+ *  - `down` is offered every single-finger / left-button press; returning true claims the drag
+ *    (the camera stays put) until `up`, or `cancel` if a second finger joins.
+ *  - `tap` fires for short presses that weren't claimed and barely moved.
+ *  - `hover` reports mouse movement with no button pressed.
+ */
+export interface PointerTool {
+  down(x: number, y: number): boolean;
+  move(x: number, y: number): void;
+  up(x: number, y: number): void;
+  cancel(): void;
+  tap(x: number, y: number): void;
+  hover(x: number, y: number): void;
+}
+
+const TAP_MOVE = 10; // px
+const TAP_TIME = 450; // ms
+
+/**
  * Touch + mouse camera controls.
  *  Touch: 1 finger = pan (ground stays under the finger),
  *         2 fingers = pinch zoom, twist rotate, vertical drag tilts.
@@ -16,6 +35,10 @@ interface Pt {
 export class CameraController {
   private readonly pointers = new Map<number, Pt>();
   private shiftOrbit = false;
+  /** Editing tool hooks (null = camera only). */
+  tool: PointerTool | null = null;
+  private claimed = false;
+  private gesture = { x: 0, y: 0, t: 0, tap: false };
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly cam: OrbitCamera) {
     canvas.addEventListener('pointerdown', this.onDown);
@@ -64,14 +87,30 @@ export class CameraController {
     this.canvas.setPointerCapture(e.pointerId);
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button });
     this.shiftOrbit = e.shiftKey;
+    if (this.pointers.size === 1) {
+      this.gesture = { x: e.clientX, y: e.clientY, t: performance.now(), tap: e.button === 0 && !e.shiftKey };
+      this.claimed = !!this.tool && e.button === 0 && !e.shiftKey && this.tool.down(e.clientX, e.clientY);
+    } else {
+      this.gesture.tap = false;
+      if (this.claimed) {
+        this.claimed = false;
+        this.tool?.cancel();
+      }
+    }
   };
 
   private onMove = (e: PointerEvent): void => {
     const p = this.pointers.get(e.pointerId);
-    if (!p) return;
+    if (!p) {
+      if (this.pointers.size === 0 && e.pointerType === 'mouse') this.tool?.hover(e.clientX, e.clientY);
+      return;
+    }
     const nx = e.clientX, ny = e.clientY;
+    if (Math.hypot(nx - this.gesture.x, ny - this.gesture.y) > TAP_MOVE) this.gesture.tap = false;
 
-    if (this.pointers.size === 1) {
+    if (this.claimed) {
+      if (this.pointers.size === 1) this.tool?.move(nx, ny);
+    } else if (this.pointers.size === 1) {
       if (e.pointerType === 'mouse' && (p.button === 2 || this.shiftOrbit)) {
         this.rotate(nx - p.x, ny - p.y);
       } else {
@@ -99,7 +138,15 @@ export class CameraController {
   };
 
   private onUp = (e: PointerEvent): void => {
-    this.pointers.delete(e.pointerId);
+    if (!this.pointers.delete(e.pointerId)) return;
+    if (this.pointers.size > 0) return;
+    if (this.claimed) {
+      this.claimed = false;
+      if (e.type === 'pointercancel') this.tool?.cancel();
+      else this.tool?.up(e.clientX, e.clientY);
+    } else if (this.gesture.tap && e.type === 'pointerup' && performance.now() - this.gesture.t < TAP_TIME) {
+      this.tool?.tap(e.clientX, e.clientY);
+    }
   };
 
   private onWheel = (e: WheelEvent): void => {

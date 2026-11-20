@@ -3,6 +3,7 @@
 A mobile-first browser game about building and redesigning road infrastructure, with a realistic traffic simulation. It uses its own engine written in TypeScript on raw WebGL 2.
 
 - Plan, progress and known issues are in `docs/PLAN.md`. Update its **Progress** section at the end of every milestone.
+- `README.md` is the project's GitHub front page for players and visitors. Update it in the same commit whenever a change affects what players see or do (tools, junction options, controls, saving), how to run the project, or the play link.
 
 ## Commands
 Node is installed via nvm, so non-interactive shells need: `export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"`.

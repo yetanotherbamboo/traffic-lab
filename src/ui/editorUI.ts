@@ -134,15 +134,12 @@ export class EditorUI {
     const stop = (): HTMLElement => chip('✕', false, () => ed.discard(), 'icon');
     if (ed.tool === 'road' && ed.pending && d) {
       // A pending road: what it costs (or why it can't be built), with ✕ and ✓ either side.
-      out.push(stop(), ' ');
-      if (d.error) {
-        out.push(h('span', { class: 'err' }, d.error));
-      } else {
-        out.push(...this.costLine(d));
-      }
+      // One row: ✕ | what it costs (or why not), wrapping in the middle | ✓ Build.
+      const text = d.error ? h('span', { class: 'err' }, d.error) : h('span', {}, ...this.costLine(d));
+      text.classList.add('grow');
       const ok = chip('✓ Build', false, () => ed.confirm(), 'go') as HTMLButtonElement;
       ok.disabled = !ed.canConfirm;
-      out.push(' ', ok);
+      out.push(stop(), text, ok);
     } else if (d?.candidate && ed.tool === 'bend') {
       out.push(...(d.error ? [h('span', { class: 'err' }, d.error)] : this.costLine(d)));
     } else if (ed.tool === 'road' && ed.pendingStart) {
@@ -157,6 +154,7 @@ export class EditorUI {
       out.push(HINTS[ed.tool]);
     }
     this.info.replaceChildren(...out.filter((c): c is Node | string => !!c));
+    this.info.classList.toggle('pending', ed.tool === 'road' && ed.pending && !!d);
     this.info.hidden = false;
   }
 
@@ -216,16 +214,15 @@ export class EditorUI {
     const ed = this.editor, sel = ed.selection;
     const body: Child[] = [];
     if (ed.tool === 'road') {
-      body.push(h('div', { class: 'row' }, ...ROAD_PRESETS.map((p, i) =>
+      // Two rows that scroll sideways (no wrapping), so the panel stays short on a phone.
+      body.push(h('div', { class: 'row scroll' }, ...ROAD_PRESETS.map((p, i) =>
         chip(`${p.name} ${p.profile.forward}${p.profile.backward ? `+${p.profile.backward}` : ''}`, ed.preset === i, () => {
           ed.setPreset(i);
         }))));
-      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Mode'),
-        ...SHAPES.map(([m, label]) => chip(label, ed.drawMode === m, () => ed.setDrawMode(m)))));
-      if (ed.drawMode !== 'upgrade') {
-        body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Snapping'),
-          chip('On', ed.snapping, () => ed.setSnapping(true)), chip('Off', !ed.snapping, () => ed.setSnapping(false))));
-      }
+      body.push(h('div', { class: 'row scroll' },
+        ...SHAPES.map(([m, label]) => chip(label, ed.drawMode === m, () => ed.setDrawMode(m))),
+        ed.drawMode !== 'upgrade' && h('span', { class: 'vsep' }),
+        ed.drawMode !== 'upgrade' && chip('Snap', ed.snapping, () => ed.setSnapping(!ed.snapping), 'toggle')));
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {
@@ -233,7 +230,10 @@ export class EditorUI {
     } else if (ed.tool === 'select' && sel?.kind === 'roundabout' && this.world.net.roundabouts.has(sel.id)) {
       body.push(...this.roundaboutPanel(sel.id));
     }
+    // Rebuilding resets sideways-scrolled rows: keep where they were.
+    const scrolled = [...this.panel.querySelectorAll<HTMLElement>('.row.scroll')].map((r) => r.scrollLeft);
     this.panel.replaceChildren(...body.filter((c): c is Node | string => !!c));
+    this.panel.querySelectorAll<HTMLElement>('.row.scroll').forEach((r, i) => (r.scrollLeft = scrolled[i] ?? 0));
     this.panel.hidden = body.length === 0;
   }
 

@@ -55,6 +55,35 @@ describe('buildRoadMesh', () => {
     for (const v of mesh.vertices) expect(Number.isFinite(v)).toBe(true);
   });
 
+  it('compact junctions of small roads face upwards and are smaller', () => {
+    const ALLEY = { forward: 1, backward: 1, laneWidth: 2.75, sidewalk: 1, speedLimit: 30 };
+    const STREET = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+    const LANE = { forward: 1, backward: 0, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 };
+    const radius = (side: typeof STREET, arms: [number, number][]) => {
+      const net = new RoadNetwork();
+      const c = net.addNode([0, 0, 0]);
+      arms.forEach(([x, z], k) => net.addSegment(c, net.addNode([x, 0, z]), k < 2 ? STREET : side));
+      const mesh = buildRoadMesh(net);
+      const V = mesh.vertices, S = ROAD_STRIDE;
+      for (let t = 0; t < mesh.indices.length; t += 3) {
+        const [a, b, d] = [mesh.indices[t]!, mesh.indices[t + 1]!, mesh.indices[t + 2]!];
+        if (V[a * S + 4]! < 0.99) continue;
+        const e1 = [V[b * S]! - V[a * S]!, V[b * S + 2]! - V[a * S + 2]!], e2 = [V[d * S]! - V[a * S]!, V[d * S + 2]! - V[a * S + 2]!];
+        expect(e1[1]! * e2[0]! - e1[0]! * e2[1]!).toBeGreaterThanOrEqual(-1e-6);
+      }
+      return net.junctionRadius(c);
+    };
+    const T: [number, number][] = [[50, 0], [-50, 0], [0, 50]];
+    const street = radius(STREET, T), lane = radius(LANE, T), alley = radius(ALLEY, T);
+    expect(lane).toBeLessThan(street - 1);
+    expect(alley).toBeLessThan(street - 1);
+    // Four alleys: a compact crossroads.
+    const net = new RoadNetwork();
+    const c = net.addNode([0, 0, 0]);
+    for (const [x, z] of [[40, 0], [-40, 0], [0, 40], [0, -40]] as [number, number][]) net.addSegment(c, net.addNode([x, 0, z]), ALLEY);
+    expect(net.junctionRadius(c)).toBeLessThan(6);
+  });
+
   it('road surfaces face upwards', () => {
     const mesh = buildRoadMesh(buildTestNetwork());
     const V = mesh.vertices, S = ROAD_STRIDE;

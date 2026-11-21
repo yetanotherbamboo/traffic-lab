@@ -98,8 +98,17 @@ export interface Arm {
 
 /** Extra length beyond the point where neighbouring sidewalk edges meet, for a rounded kerb. */
 const KERB_ROOM = 3;
+/** Kerb room at a corner next to a small road (lanes, alleys): tighter, slower corners. */
+const KERB_ROOM_SMALL = 1.5;
 /** Minimum distance from a junction centre to where a road begins. */
 const MIN_TRIM = 5;
+/** The same where a small road meets the junction. */
+const MIN_TRIM_SMALL = 3;
+
+/** Small roads (lanes, alleys) get compact junctions: at most one lane each way, narrow. */
+export function isSmall(p: LaneProfile): boolean {
+  return p.forward <= 1 && p.backward <= 1 && p.laneWidth <= 3 && p.sidewalk <= 1.5;
+}
 
 export const horizontal = (v: Vec3): Vec3 => vec3.normalize([v[0], 0, v[2]]);
 export const rightOf = (d: Vec3): Vec3 => [-d[2], 0, d[0]];
@@ -333,7 +342,7 @@ export class RoadNetwork {
         return half + walk + 3;
       }
     }
-    return MIN_TRIM;
+    return segs.some((sid) => isSmall(this.segments.get(sid)!.profile)) ? MIN_TRIM_SMALL : MIN_TRIM;
   }
 
   /**
@@ -351,7 +360,7 @@ export class RoadNetwork {
       const { incoming, outgoing } = this.lanesAt(seg, nodeId);
       const { laneWidth: w, sidewalk: sw } = seg.profile;
       // Outward frame: outgoing lanes are on the right, incoming on the left.
-      return { id: sid, dir, right: rightOf(dir), L: incoming * w + sw, R: outgoing * w + sw, angle: Math.atan2(dir[2], dir[0]) };
+      return { id: sid, dir, right: rightOf(dir), L: incoming * w + sw, R: outgoing * w + sw, angle: Math.atan2(dir[2], dir[0]), small: isSmall(seg.profile) };
     }).sort((p, q) => p.angle - q.angle);
     const n = arms.length;
     const i = arms.findIndex((a) => a.id === segId);
@@ -370,7 +379,7 @@ export class RoadNetwork {
       const t = (rx * -c.dir[2] - rz * -c.dir[0]) / den;
       const u = (a.dir[0] * rz - a.dir[2] * rx) / den;
       const d = mine === 'a' ? t : u;
-      if (d > 0) trim = Math.max(trim, d + KERB_ROOM);
+      if (d > 0) trim = Math.max(trim, d + (a.small || c.small ? KERB_ROOM_SMALL : KERB_ROOM));
     };
     pair(arms[i]!, arms[(i + 1) % n]!, 'a');
     pair(arms[(i - 1 + n) % n]!, arms[i]!, 'c');

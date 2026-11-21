@@ -13,6 +13,8 @@ const DT = 0.1;
 const PARAMS = { T: 1.4, aMax: 1.5, b: 2, s0: 2 };
 const ARTERIAL: LaneProfile = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 };
 const LOCAL: LaneProfile = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+const ALLEY: LaneProfile = { forward: 1, backward: 1, laneWidth: 2.75, sidewalk: 1, speedLimit: 30 };
+const LANE_IN: LaneProfile = { forward: 0, backward: 1, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 }; // one-way towards the junction
 
 /** Straight two-way road between two dead ends, 50 km/h. */
 function straightRoad(lanes = 1, length = 1500) {
@@ -252,6 +254,8 @@ describe('junction scenarios (no collisions, no gridlock)', () => {
     ['priority 4-way (main + side road)', 'priority', MIXED, 450],
     ['all-way stop', 'allway', [[150, 0, LOCAL], [-150, 0, LOCAL], [0, 150, LOCAL], [0, -150, LOCAL]], 200],
     ['priority T-junction', 'priority', [[200, 0, ARTERIAL], [-200, 0, ARTERIAL], [0, 200, LOCAL]], 500],
+    ['compact alley 4-way (all-way stop)', 'allway', [[150, 0, ALLEY], [-150, 0, ALLEY], [0, 150, ALLEY], [0, -150, ALLEY]], 150],
+    ['one-lane lane joining a street', 'priority', [[200, 0, LOCAL], [-200, 0, LOCAL], [0, 200, LANE_IN]], 300],
   ] as const) {
     it(name, () => {
       const sim = junction(control, arms as unknown as [number, number, LaneProfile][], rate);

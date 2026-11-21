@@ -480,6 +480,35 @@ describe('the red cross only allows starts that can lead somewhere', () => {
   });
 });
 
+describe('small roads', () => {
+  /** Closest spacing (m) at which a second side road of `preset` fits next to a first one on the south street. */
+  const spacing = (preset: number): number => {
+    for (let d = 4; d <= 40; d++) {
+      const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+      const ed = new Editor(w);
+      ed.setTool('road');
+      ed.preset = preset;
+      ed.down([0, 0, 40], 1.5);
+      ed.move([40, 0, 40], 1.5);
+      if (ed.draft?.error) throw new Error(ed.draft.error);
+      ed.up();
+      ed.down([0, 0, 40 + d], 1.5);
+      ed.move([40, 0, 40 + d], 1.5);
+      const ok = ed.draft !== null && ed.draft.error === null && ed.draft.candidate !== null;
+      ed.cancel();
+      if (ok) return d;
+    }
+    return Infinity;
+  };
+
+  it('lanes and alleys fit much closer together than streets', () => {
+    const street = spacing(0), lane = spacing(4), alley = spacing(5);
+    expect(street).toBeLessThan(Infinity);
+    expect(lane).toBeLessThanOrEqual(street * 0.75);
+    expect(alley).toBeLessThanOrEqual(street * 0.75);
+  });
+});
+
 describe('starting a road near the construction-zone border', () => {
   it('the cut at the border is no junction: roads start next to it (or on it)', () => {
     // A border 70 m from the centre, well clear of the ring street's junctions.

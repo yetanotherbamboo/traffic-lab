@@ -226,7 +226,8 @@ export class JunctionModel {
         this.incoming.set(nodeId, [...new Set(conns.map((c) => c.prev[0]!))]);
         this.major.set(nodeId, new Set(node.segments));
       } else {
-        const control = node.control ?? 'priority';
+        // Entrances always give the through road right of way.
+        const control = net.isEntrance(nodeId) ? 'priority' : node.control ?? 'priority';
         this.control.set(nodeId, control);
         this.incoming.set(nodeId, [...new Set(conns.map((c) => c.prev[0]!))]);
         if (control === 'priority') this.major.set(nodeId, this.majorRoad(nodeId));
@@ -259,6 +260,7 @@ export class JunctionModel {
     const node = this.graph.net.node(nodeId);
     // On a roundabout the ring always has right of way, wherever roads join it.
     if (node.ring !== undefined) return new Set(node.segments.filter((s) => this.graph.net.segment(s).ring === node.ring));
+    if (this.graph.net.isEntrance(nodeId)) return new Set(this.graph.net.entranceLayout(nodeId)!.slice(0, 2));
     const chosen = node.major;
     if (chosen && chosen.every((s) => this.graph.net.node(nodeId).segments.includes(s))) return new Set(chosen);
     const arms = this.graph.net.arms(nodeId);

@@ -141,7 +141,12 @@ export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile)
       const p = trial.node(a.id).pos;
       const stub = trial.addSegment(a.id, trial.addNode([p[0] + Math.cos(h) * STUB, 0, p[2] + Math.sin(h) * STUB]), profile);
       // Only the existing roads count: the new one can be drawn as long as it needs to be.
-      if (!trial.node(a.id).segments.some((id) => id !== stub && tooShort(trial, trial.segment(id)))) return null;
+      const fits = (): boolean => !trial.node(a.id).segments.some((id) => id !== stub && tooShort(trial, trial.segment(id)));
+      if (fits()) return null;
+      if (trial.entranceLayout(a.id)) {
+        trial.node(a.id).entrance = true;
+        if (fits()) return null;
+      }
     }
     return TOO_CLOSE;
   }
@@ -153,7 +158,12 @@ export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile)
     const { node, first, second } = trial.splitSegment(a.id, a.t);
     const p = trial.node(node).pos;
     trial.addSegment(node, trial.addNode([p[0] + r[0] * STUB * side, 0, p[2] + r[2] * STUB * side]), profile);
-    if (!tooShort(trial, trial.segment(first)) && !tooShort(trial, trial.segment(second))) return null;
+    const fits = (): boolean => !tooShort(trial, trial.segment(first)) && !tooShort(trial, trial.segment(second));
+    if (fits()) return null;
+    if (trial.entranceLayout(node)) {
+      trial.node(node).entrance = true; // a small road may join as an entrance
+      if (fits()) return null;
+    }
   }
   return TOO_CLOSE;
 }
@@ -167,7 +177,26 @@ export function addRoad(net: RoadNetwork, start: Anchor, end: Anchor, profile: L
   const id = net.addSegment(a, b, profile);
   const cost = roadCost(net.segment(id));
   const changed = splitCrossings(net, [id]);
+  preferEntrance(net, a);
+  preferEntrance(net, b);
   return { changed, touched: touchedAround(net, changed), cost };
+}
+
+/** Does a road at this node leave any of its roads too short? */
+function crowded(net: RoadNetwork, nodeId: number): boolean {
+  return net.node(nodeId).segments.some((id) => tooShort(net, net.segment(id)));
+}
+
+/**
+ * Where a small road joins a through road and a full junction doesn't fit, the join becomes an
+ * entrance (a driveway-like join that needs much less room), if that fits.
+ */
+export function preferEntrance(net: RoadNetwork, nodeId: number): void {
+  if (!net.nodes.has(nodeId)) return;
+  const node = net.node(nodeId);
+  if (node.entrance || !net.entranceLayout(nodeId) || !crowded(net, nodeId)) return;
+  node.entrance = true;
+  if (crowded(net, nodeId)) delete node.entrance;
 }
 
 /**
@@ -206,7 +235,13 @@ export function setLanes(net: RoadNetwork, segId: number, forward: number, backw
     throw new EditError('Not a valid number of lanes');
   }
   const before = roadCost(seg);
+  const around = [...new Set([seg.a, seg.b].flatMap((n) => net.node(n).segments))];
+  const shortBefore = new Set(around.filter((id) => tooShort(net, net.segment(id))));
   seg.profile = { ...seg.profile, forward, backward };
+  // A road joining as an entrance can't take a second lane each way where a junction won't fit.
+  if ((net.node(seg.a).entrance || net.node(seg.b).entrance) && around.some((id) => !shortBefore.has(id) && tooShort(net, net.segment(id)))) {
+    throw new EditError('Not enough room for more lanes here');
+  }
   delete seg.turnsA;
   delete seg.turnsB;
   // Widening pays for the new asphalt; narrowing only for repainting.
@@ -222,6 +257,18 @@ export function setSpeed(net: RoadNetwork, segId: number, kmh: number): EditResu
 
 export function setControl(net: RoadNetwork, nodeId: number, control: JunctionControl): void {
   net.node(nodeId).control = control;
+}
+
+/** Makes a join an entrance or a full junction (see `RoadNode.entrance`). */
+export function setEntrance(net: RoadNetwork, nodeId: number, on: boolean): void {
+  const n = net.node(nodeId);
+  if (on) {
+    if (!net.entranceLayout(nodeId)) throw new EditError('Only a road with one lane each way can join as an entrance');
+    n.entrance = true;
+  } else {
+    delete n.entrance;
+    if (crowded(net, nodeId)) throw new EditError("A full junction doesn't fit here: the roads are too close together");
+  }
 }
 
 /** Turns non-stop lanes on or off at a junction (see `RoadNode.freeFlow`). */

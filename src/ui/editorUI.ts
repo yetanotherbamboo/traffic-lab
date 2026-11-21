@@ -1,6 +1,6 @@
 import { formatMoney } from '../editor/cost';
 import { type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
-import { MAX_LANES, setControl, setFreeFlow, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
+import { MAX_LANES, setControl, setEntrance, setFreeFlow, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
 import {
   RING_MAX_LANES, RING_MIN_LANES, convertToRoundabout, outerRadius, removeRoundabout, setRoundaboutLanes, setRoundaboutSize,
 } from '../editor/roundabout';
@@ -238,13 +238,20 @@ export class EditorUI {
     const control = node.control ?? 'priority';
     const arms = net.arms(nodeId);
     const colorOf = (segId: number): string => APPROACH_HEX[arms.findIndex((a) => a.segment.id === segId) % APPROACH_HEX.length]!;
-    const out: Child[] = [
-      h('h3', {}, `Junction · ${arms.length} roads`),
-      h('div', { class: 'row' }, ...CONTROLS.map(([c, label]) => chip(label, control === c, () => this.act((n) => setControl(n, nodeId, c)))),
-        chip('Roundabout', false, () => this.toRoundabout(nodeId))),
-    ];
+    const entrance = net.isEntrance(nodeId);
+    const out: Child[] = [h('h3', {}, entrance ? 'Entrance · the through road has right of way' : `Junction · ${arms.length} roads`)];
+    // A small road joining a through road can be a compact entrance instead of a full junction.
+    if (net.entranceLayout(nodeId)) {
+      out.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Type'),
+        chip('Junction', !entrance, () => entrance && this.act((n) => setEntrance(n, nodeId, false))),
+        chip('Entrance', entrance, () => !entrance && this.act((n) => setEntrance(n, nodeId, true)))));
+    }
+    if (!entrance) {
+      out.push(h('div', { class: 'row' }, ...CONTROLS.map(([c, label]) => chip(label, control === c, () => this.act((n) => setControl(n, nodeId, c)))),
+        chip('Roundabout', false, () => this.toRoundabout(nodeId))));
+    }
 
-    if (control === 'priority') {
+    if (control === 'priority' && !entrance) {
       const major = w.sim.junctions.major.get(nodeId);
       const pairs: [number, number][] = [];
       for (let i = 0; i < arms.length; i++) for (let j = i + 1; j < arms.length; j++) pairs.push([arms[i]!.segment.id, arms[j]!.segment.id]);
@@ -254,7 +261,7 @@ export class EditorUI {
         chip('Change', false, () => this.act((n) => setMajor(n, nodeId, pairs[(cur + 1) % pairs.length]!)))));
     }
 
-    if (control === 'signal') {
+    if (control === 'signal' && !entrance) {
       const ctrl = w.sim.junctions.signals.get(nodeId);
       ctrl?.phases.forEach((ph, k) => {
         const set = (s: number): void => this.act((n) => {

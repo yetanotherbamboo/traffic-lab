@@ -8,6 +8,8 @@ const MIN_RING_ARC = 5;
 
 /** Shortest drivable stretch of road between two junctions (m). */
 export const MIN_ROAD = 6;
+/** The same where the stretch ends at an entrance (a driveway-like join, `RoadNetwork.isEntrance`). */
+export const MIN_ROAD_ENTRANCE = 2;
 /** Junction areas must fit on a road piece with at least this much road left between them (m). */
 const MIN_PIECE = 1;
 
@@ -20,12 +22,16 @@ const MIN_PIECE = 1;
 export function tooShort(net: RoadNetwork, seg: RoadSegment): boolean {
   const [s0, s1] = net.trimmedRange(seg);
   if (s1 - s0 < MIN_PIECE) return true;
-  let len = s1 - s0;
+  let len = s1 - s0, need = MIN_ROAD;
   for (const start of [seg.a, seg.b]) {
     let node = start, from = seg.id;
-    for (let hop = 0; hop < 8 && len < MIN_ROAD; hop++) {
+    for (let hop = 0; hop < 8; hop++) {
       const n = net.node(node);
-      if (n.segments.length !== 2 || net.isJunction(node)) break;
+      if (n.segments.length !== 2 || net.isJunction(node)) {
+        if (net.nodes.has(node) && net.isEntrance(node)) need = MIN_ROAD_ENTRANCE;
+        break;
+      }
+      if (len >= MIN_ROAD) break;
       const nextId = n.segments[0] === from ? n.segments[1]! : n.segments[0]!;
       if (nextId === seg.id) break; // a loop of joints
       const next = net.segment(nextId);
@@ -35,7 +41,7 @@ export function tooShort(net: RoadNetwork, seg: RoadSegment): boolean {
       node = net.otherEnd(next, node);
     }
   }
-  return len < MIN_ROAD;
+  return len < need;
 }
 
 /** Smallest angle between neighbouring roads at a junction. */

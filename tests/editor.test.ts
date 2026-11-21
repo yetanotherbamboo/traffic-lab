@@ -501,11 +501,42 @@ describe('small roads', () => {
     return Infinity;
   };
 
-  it('lanes and alleys fit much closer together than streets', () => {
-    const street = spacing(0), lane = spacing(4), alley = spacing(5);
-    expect(street).toBeLessThan(Infinity);
-    expect(lane).toBeLessThanOrEqual(street * 0.75);
-    expect(alley).toBeLessThanOrEqual(street * 0.75);
+  it('side roads fit much closer together than before (compact junctions and entrances)', () => {
+    // Before small-road junctions and entrances a second street needed 24 m.
+    expect(spacing(0)).toBeLessThanOrEqual(19);
+    expect(spacing(4)).toBeLessThanOrEqual(12); // lane
+    expect(spacing(5)).toBeLessThanOrEqual(13); // alley
+  });
+
+  it('a lane next to the centre crossroads joins as an entrance, and can\'t be widened there', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.preset = 4; // lane
+    ed.hoverAt([15, 0, 0], 1.5);
+    expect(ed.hover!.kind).toBe('segment');
+    ed.down([15, 0, 0], 1.5);
+    ed.move([15, 0, -40], 1.5);
+    expect(ed.draft?.error ?? null).toBeNull();
+    ed.up();
+    const node = [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - 15, n.pos[2]) < 0.5)!;
+    expect(w.net.isEntrance(node.id)).toBe(true);
+    // The through road keeps right of way; the entrance has no other control.
+    expect(w.sim.junctions.control.get(node.id)).toBe('priority');
+    const lane = node.segments.find((id) => w.net.segment(id).profile.laneWidth === 3)!;
+    expect([...w.sim.junctions.major.get(node.id)!]).not.toContain(lane);
+    // Saved and loaded.
+    expect(RoadNetwork.fromData(JSON.parse(JSON.stringify(w.net.toData()))).isEntrance(node.id)).toBe(true);
+    // More lanes don't fit here: refused, nothing changes.
+    const before = JSON.stringify(w.net.toData());
+    expect(ed.apply((n) => setLanes(n, lane, 1, 1))).toBe('Not enough room for more lanes here');
+    expect(JSON.stringify(w.net.toData())).toBe(before);
+    // Further along, a full junction fits: a lane there stays a normal junction.
+    ed.down([50, 0, 0], 1.5);
+    ed.move([50, 0, -40], 1.5);
+    ed.up();
+    const far = [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - 50, n.pos[2]) < 0.5)!;
+    expect(far.entrance).toBeUndefined();
   });
 });
 

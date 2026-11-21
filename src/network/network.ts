@@ -39,6 +39,12 @@ export interface RoadNode {
    * control and drive straight through.
    */
   freeFlow?: boolean;
+  /**
+   * Entrance: a small road (at most one lane each way) joining a road that runs straight through,
+   * like a driveway. The through road is barely interrupted and always has right of way. Only
+   * takes effect while the layout qualifies (`isEntrance`); otherwise this is a normal junction.
+   */
+  entrance?: boolean;
 }
 
 /**
@@ -73,7 +79,7 @@ export interface RoadSegment {
 /** Plain-data form of a network (levels, undo snapshots). */
 export interface NetworkData {
   nextId: number;
-  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number>; ring?: number; freeFlow?: boolean }[];
+  nodes: { id: number; pos: Vec3; control?: JunctionControl; major?: [number, number]; greens?: Record<number, number>; ring?: number; freeFlow?: boolean; entrance?: boolean }[];
   segments: {
     id: number; a: number; b: number; c1: Vec3; c2: Vec3; profile: LaneProfile; turnsA?: number[]; turnsB?: number[]; ring?: number;
   }[];
@@ -104,6 +110,11 @@ const KERB_ROOM_SMALL = 1.5;
 const MIN_TRIM = 5;
 /** The same where a small road meets the junction. */
 const MIN_TRIM_SMALL = 3;
+
+/** Entrances: how far past the side road's edge the through road's kerb gap reaches (m). */
+const ENTRANCE_FLARE = 1;
+/** Entrances: kerb room where the side road starts beyond the through road's edge (m). */
+const ENTRANCE_KERB = 0.5;
 
 /** Small roads (lanes, alleys) get compact junctions: at most one lane each way, narrow. */
 export function isSmall(p: LaneProfile): boolean {
@@ -246,6 +257,7 @@ export class RoadNetwork {
         ...(n.greens ? { greens: { ...n.greens } } : {}),
         ...(n.ring !== undefined ? { ring: n.ring } : {}),
         ...(n.freeFlow ? { freeFlow: true } : {}),
+        ...(n.entrance ? { entrance: true } : {}),
       })),
       segments: [...this.segments.values()].map((s) => ({
         id: s.id, a: s.a, b: s.b, c1: [...s.curve.p1] as Vec3, c2: [...s.curve.p2] as Vec3, profile: { ...s.profile },
@@ -268,6 +280,7 @@ export class RoadNetwork {
       if (n.greens) node.greens = { ...n.greens };
       if (n.ring !== undefined) node.ring = n.ring;
       if (n.freeFlow) node.freeFlow = true;
+      if (n.entrance) node.entrance = true;
       net.nodes.set(n.id, node);
     }
     for (const s of d.segments) {
@@ -296,6 +309,55 @@ export class RoadNetwork {
   lanesAt(seg: RoadSegment, nodeId: number): { incoming: number; outgoing: number } {
     const { forward, backward } = seg.profile;
     return seg.b === nodeId ? { incoming: forward, outgoing: backward } : { incoming: backward, outgoing: forward };
+  }
+
+  /**
+   * Where a node could be an entrance: three roads (no roundabout), two of them continuing
+   * straight through each other with the same lanes, and the third with at most one lane each
+   * way. Returns [through road, through road, side road], or null.
+   */
+  entranceLayout(nodeId: number): [number, number, number] | null {
+    const node = this.node(nodeId);
+    if (node.segments.length !== 3 || node.ring !== undefined) return null;
+    const segs = node.segments.map((id) => this.segments.get(id)!);
+    for (let k = 0; k < 3; k++) {
+      const side = segs[k]!, m0 = segs[(k + 1) % 3]!, m1 = segs[(k + 2) % 3]!;
+      if (vec3.dot(this.leaveDir(m0, nodeId), this.leaveDir(m1, nodeId)) > -0.985) continue;
+      const l0 = this.lanesAt(m0, nodeId), l1 = this.lanesAt(m1, nodeId);
+      if (l0.incoming !== l1.outgoing || l0.outgoing !== l1.incoming) continue;
+      if (m0.profile.laneWidth !== m1.profile.laneWidth || m0.profile.sidewalk !== m1.profile.sidewalk) continue;
+      const ls = this.lanesAt(side, nodeId);
+      if (ls.incoming > 1 || ls.outgoing > 1) continue;
+      return [m0.id, m1.id, side.id];
+    }
+    return null;
+  }
+
+  /** Is this node an entrance (flagged and laid out like one)? */
+  isEntrance(nodeId: number): boolean {
+    return !!this.node(nodeId).entrance && this.entranceLayout(nodeId) !== null;
+  }
+
+  /**
+   * Junction trims at an entrance: the through road stops just past the side road's edges, and the
+   * side road starts at the through road's kerb line.
+   */
+  private entranceTrim(nodeId: number, segId: number, layout: [number, number, number]): number {
+    const [m0, , sideId] = layout;
+    const side = this.segments.get(sideId)!, main = this.segments.get(m0)!;
+    if (segId === sideId) {
+      // Half the through road's width (its carriageway and sidewalk) on the side road's side.
+      const dir = this.leaveDir(main, nodeId), sdir = this.leaveDir(side, nodeId);
+      const { incoming, outgoing } = this.lanesAt(main, nodeId);
+      const onRight = vec3.dot(rightOf(dir), sdir) > 0;
+      const lanes = onRight ? outgoing : incoming;
+      return lanes * main.profile.laneWidth + main.profile.sidewalk + ENTRANCE_KERB;
+    }
+    // The side road's carriageway towards this arm: its right side holds its outgoing lanes.
+    const { incoming, outgoing } = this.lanesAt(side, nodeId);
+    const towards = vec3.dot(rightOf(this.leaveDir(side, nodeId)), this.leaveDir(this.segments.get(segId)!, nodeId)) > 0;
+    const half = (towards ? outgoing : incoming) * side.profile.laneWidth;
+    return half + side.profile.sidewalk + ENTRANCE_FLARE;
   }
 
   /** Untrimmed horizontal direction of a segment leaving the node. */
@@ -353,6 +415,10 @@ export class RoadNetwork {
    */
   armTrim(nodeId: number, segId: number): number {
     if (!this.isJunction(nodeId)) return 0;
+    if (this.node(nodeId).entrance) {
+      const layout = this.entranceLayout(nodeId);
+      if (layout) return this.entranceTrim(nodeId, segId, layout);
+    }
     const base = this.baseRadius(nodeId);
     const arms = this.node(nodeId).segments.map((sid) => {
       const seg = this.segments.get(sid)!;

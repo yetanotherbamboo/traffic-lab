@@ -69,7 +69,7 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
   } else if (sel?.kind === 'node' && w.net.nodes.has(sel.id)) {
     const node = w.net.node(sel.id);
     ob.ring(node.pos, w.net.junctionRadius(sel.id) + 1, OVERLAY.select, 0.5);
-    const major = (node.control ?? 'priority') === 'priority' ? w.sim.junctions.major.get(sel.id) : undefined;
+    const major = w.sim.junctions.control.get(sel.id) === 'priority' ? w.sim.junctions.major.get(sel.id) : undefined;
     w.net.arms(sel.id).forEach((a, i) => {
       const c = APPROACH[i % APPROACH.length]!;
       const l: Vec3 = [a.end[0] - a.right[0] * a.leftExt, 0, a.end[2] - a.right[2] * a.leftExt];

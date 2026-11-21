@@ -267,6 +267,26 @@ describe('junction scenarios (no collisions, no gridlock)', () => {
   }
 });
 
+describe('entrances', () => {
+  it('traffic turns in and out of a lane entrance without collisions', () => {
+    const net = new RoadNetwork();
+    const c = net.addNode([0, 0, 0]);
+    const ends = [net.addNode([200, 0, 0]), net.addNode([-200, 0, 0]), net.addNode([0, 0, 150])];
+    net.addSegment(ends[1]!, c, LOCAL);
+    net.addSegment(c, ends[0]!, LOCAL);
+    net.addSegment(c, ends[2]!, { ...ALLEY }); // two-way small road
+    net.node(c).entrance = true;
+    expect(net.isEntrance(c)).toBe(true);
+    expect(net.junctionRadius(c)).toBeLessThan(10);
+    const sim = new TrafficSim(new LaneGraph(net), ends.map((node) => ({ node, rate: 300 })), 7);
+    expect(sim.junctions.major.get(c)!.size).toBe(2);
+    const { collisions, longestStop } = run(sim, 900);
+    expect(collisions, 'overlapping vehicles').toBe(0);
+    expect(longestStop).toBeLessThan(150);
+    expect(sim.stats.exited).toBeGreaterThan(100);
+  });
+});
+
 describe('left turns', () => {
   it('never cut in front of oncoming traffic or clip waiting cars (several seeds)', () => {
     for (const seed of [8, 9, 11]) {

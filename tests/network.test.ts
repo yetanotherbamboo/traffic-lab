@@ -84,6 +84,36 @@ describe('buildRoadMesh', () => {
     expect(net.junctionRadius(c)).toBeLessThan(6);
   });
 
+  it('entrances face upwards and are smaller than a full junction', () => {
+    const STREET = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+    const AVENUE = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 };
+    const sides = [
+      { forward: 1, backward: 0, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 },
+      { forward: 0, backward: 1, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 },
+      { forward: 1, backward: 1, laneWidth: 2.75, sidewalk: 1, speedLimit: 30 },
+      STREET,
+    ];
+    for (const main of [STREET, AVENUE]) for (const side of sides) for (const z of [40, -40]) {
+      const net = new RoadNetwork();
+      const c = net.addNode([0, 0, 0]);
+      net.addSegment(net.addNode([-50, 0, 0]), c, main);
+      net.addSegment(c, net.addNode([50, 0, 0]), main);
+      net.addSegment(c, net.addNode([0, 0, z]), side);
+      const full = net.junctionRadius(c);
+      net.node(c).entrance = true;
+      expect(net.isEntrance(c)).toBe(true);
+      expect(net.junctionRadius(c)).toBeLessThanOrEqual(full);
+      const mesh = buildRoadMesh(net);
+      const V = mesh.vertices, S = ROAD_STRIDE;
+      for (let t = 0; t < mesh.indices.length; t += 3) {
+        const [a, b, d] = [mesh.indices[t]!, mesh.indices[t + 1]!, mesh.indices[t + 2]!];
+        if (V[a * S + 4]! < 0.99) continue;
+        const e1 = [V[b * S]! - V[a * S]!, V[b * S + 2]! - V[a * S + 2]!], e2 = [V[d * S]! - V[a * S]!, V[d * S + 2]! - V[a * S + 2]!];
+        expect(e1[1]! * e2[0]! - e1[0]! * e2[1]!).toBeGreaterThanOrEqual(-1e-6);
+      }
+    }
+  });
+
   it('road surfaces face upwards', () => {
     const mesh = buildRoadMesh(buildTestNetwork());
     const V = mesh.vertices, S = ROAD_STRIDE;

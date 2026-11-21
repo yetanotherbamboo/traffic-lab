@@ -115,3 +115,45 @@ export function bendSpeed(c: CubicBezier, profile: LaneProfile): number | null {
   const v = Math.sqrt(MAX_LAT_ACCEL * Math.max(inner, 1)) * 3.6;
   return v >= speedLimit ? null : Math.max(5, Math.floor(v / 5) * 5);
 }
+
+/** Clear space between the two roads of a parallel pair, beyond their sidewalks (m). */
+export const MEDIAN = 2;
+
+/**
+ * Sideways distance (m) from the drawn line to each road of a parallel pair. One-way roads have
+ * their lanes on the right of their own line, and the left road runs the other way, so each sits
+ * just past the median with its lanes outwards (a dual carriageway). Two-way roads are centred on
+ * their lines, a road's width plus the median apart.
+ */
+export function parallelOffset(p: LaneProfile): number {
+  const { forward: f, backward: b, laneWidth: w, sidewalk: sw } = p;
+  if (f === 0 || b === 0) return sw + MEDIAN / 2;
+  return ((f + b) * w + 2 * sw + MEDIAN) / 2;
+}
+
+/**
+ * A cubic Bezier offset `d` metres to the right. The ends move along their normals and keep their
+ * directions; both handles are scaled by one factor chosen so the curve's midpoint lands exactly on
+ * the true offset of the original midpoint. Exact for straight lines, within centimetres for the
+ * arcs roads use.
+ */
+export function offsetCubic(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, d: number): [Vec3, Vec3, Vec3, Vec3] {
+  const unitRight = (dx: number, dz: number): Vec3 | null => {
+    const l = Math.hypot(dx, dz);
+    return l < 1e-9 ? null : [-dz / l, 0, dx / l];
+  };
+  const chord = unitRight(p3[0] - p0[0], p3[2] - p0[2]) ?? [0, 0, 1];
+  // Tangents at the ends and the middle (B'(t) up to a factor).
+  const n0 = unitRight(p1[0] - p0[0], p1[2] - p0[2]) ?? unitRight(p2[0] - p0[0], p2[2] - p0[2]) ?? chord;
+  const n3 = unitRight(p3[0] - p2[0], p3[2] - p2[2]) ?? unitRight(p3[0] - p1[0], p3[2] - p1[2]) ?? chord;
+  const nm = unitRight(p3[0] + p2[0] - p1[0] - p0[0], p3[2] + p2[2] - p1[2] - p0[2]) ?? chord;
+  const q0: Vec3 = [p0[0] + n0[0] * d, 0, p0[2] + n0[2] * d];
+  const q3: Vec3 = [p3[0] + n3[0] * d, 0, p3[2] + n3[2] * d];
+  const h0: Vec3 = [p1[0] - p0[0], 0, p1[2] - p0[2]], h3: Vec3 = [p2[0] - p3[0], 0, p2[2] - p3[2]];
+  // B(1/2) = (q0 + q3)/2 + 3/8 · s · (h0 + h3): pick s so it hits the offset midpoint M.
+  const mx = (p0[0] + 3 * p1[0] + 3 * p2[0] + p3[0]) / 8 + nm[0] * d;
+  const mz = (p0[2] + 3 * p1[2] + 3 * p2[2] + p3[2]) / 8 + nm[2] * d;
+  const sx = h0[0] + h3[0], sz = h0[2] + h3[2], ss = sx * sx + sz * sz;
+  const s = ss < 1e-9 ? 1 : ((mx - (q0[0] + q3[0]) / 2) * sx + (mz - (q0[2] + q3[2]) / 2) * sz) / ((3 / 8) * ss);
+  return [q0, [q0[0] + h0[0] * s, 0, q0[2] + h0[2] * s], [q3[0] + h3[0] * s, 0, q3[2] + h3[2] * s], q3];
+}

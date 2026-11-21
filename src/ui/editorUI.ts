@@ -121,7 +121,7 @@ export class EditorUI {
     this.renderInfo();
     this.renderTag();
     const sel = ed.selection;
-    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${ed.snapping}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
+    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${ed.snapping}|${ed.parallel}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
     if (key !== this.panelKey) {
       this.panelKey = key;
       this.renderPanel();
@@ -206,7 +206,10 @@ export class EditorUI {
   /** "42 m · 120 k€ · demolishes 3 items (45 k€)" */
   private costLine(d: NonNullable<Editor['draft']>): Child[] {
     const out: Child[] = [];
-    if (d.length > 0) out.push(h('b', {}, `${d.length.toFixed(0)} m`), ' · ');
+    // A parallel pair: "2 × 45 m" (along the drawn line), not both lengths added up.
+    const pair = this.editor.tool === 'road' && this.editor.parallel && d.guide;
+    if (pair) out.push(h('b', {}, `2 × ${d.guide!.length.toFixed(0)} m`), ' · ');
+    else if (d.length > 0) out.push(h('b', {}, `${d.length.toFixed(0)} m`), ' · ');
     out.push(h('b', {}, formatMoney(d.cost)));
     if (d.demolish.length > 0) {
       const n = d.demolish.length;
@@ -227,6 +230,7 @@ export class EditorUI {
       body.push(h('div', { class: 'row scroll' },
         ...SHAPES.map(([m, label]) => chip(label, ed.drawMode === m, () => ed.setDrawMode(m))),
         ed.drawMode !== 'upgrade' && h('span', { class: 'vsep' }),
+        ed.drawMode !== 'upgrade' && chip('Parallel', ed.parallel, () => ed.setParallel(!ed.parallel), 'toggle'),
         ed.drawMode !== 'upgrade' && chip('Snap', ed.snapping, () => ed.setSnapping(!ed.snapping), 'toggle')));
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));

@@ -7,7 +7,7 @@ import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, moveNode, setLanes, setTurns,
 import { convertToRoundabout } from '../src/editor/roundabout';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
 import { CubicBezier } from '../src/network/bezier';
-import { TOO_SHARP, bendFrom, bendPoint, bendSpeed, continueShape, curveShape } from '../src/editor/shape';
+import { TOO_SHARP, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, offsetCubic, parallelOffset } from '../src/editor/shape';
 import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
@@ -772,6 +772,86 @@ describe('saving and resetting the city', () => {
     expect(w.sim.stats.vehicles).toBeGreaterThan(0);
     // A save of the new city only fits a world grown from the same seed.
     expect(() => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners).restore(w.snapshot())).toThrow();
+  });
+});
+
+describe('parallel roads', () => {
+  it('offsetCubic: exact for straight lines, close to the true offset of a quarter circle', () => {
+    const [a, b, c, d] = offsetCubic([0, 0, 0], [10, 0, 0], [20, 0, 0], [30, 0, 0], 4);
+    for (const p of [a, b, c, d]) expect(p[2]).toBeCloseTo(4, 9); // right of +x is +z
+    const R = 40, k = 0.5523 * R;
+    const q = offsetCubic([0, 0, 0], [k, 0, 0], [R, 0, R - k], [R, 0, R], -5); // 5 m to the outside
+    const curve = new CubicBezier(...q);
+    for (let t = 0; t <= 1; t += 0.1) {
+      const p = curve.point(t);
+      expect(Math.abs(Math.hypot(p[0], p[2] - R) - (R + 5))).toBeLessThan(0.25);
+    }
+  });
+
+  const make = () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    return { w, ed };
+  };
+  const draw = (ed: Editor, a: Vec3, b: Vec3) => { ed.down(a, 1.5); ed.move(b, 1.5); ed.up(); };
+
+  it('one-way type: a dual carriageway, each half running its own way with a median between', () => {
+    const { w, ed } = make();
+    ed.setPreset(2); // one-way 2
+    ed.setParallel(true);
+    const n0 = w.net.segments.size;
+    draw(ed, [30, 0, 30], [30, 0, 70]);
+    expect(ed.draft!.error).toBeNull();
+    expect(ed.confirm()).toBeNull();
+    expect(w.net.segments.size).toBe(n0 + 2);
+    const d = parallelOffset(ROAD_PRESETS[2]!.profile);
+    const halves = [...w.net.segments.values()].slice(-2).map((s) => {
+      const a = w.net.node(s.a).pos, b = w.net.node(s.b).pos;
+      return { x: a[0], towardsZ: Math.sign(b[2] - a[2]) * (s.profile.forward > 0 ? 1 : -1) };
+    }).sort((p, q) => p.x - q.x);
+    // Heading +z, the right side is -x: that half runs +z, the other runs back.
+    expect(halves.map((h) => h.x)).toEqual([30 - d, 30 + d]);
+    expect(halves.map((h) => h.towardsZ)).toEqual([1, -1]);
+    // Chained: the next pair joins the ends of the first (plain joints, no junctions).
+    expect(ed.pendingStart).toBe(true);
+    ed.tap([30, 0, 90], 1.5);
+    expect(ed.draft!.error).toBeNull();
+    ed.confirm();
+    for (const x of [30 - d, 30 + d]) {
+      const joint = [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - x, n.pos[2] - 70) < 0.01)!;
+      expect(joint.segments.length).toBe(2);
+      expect(w.net.isJunction(joint.id)).toBe(false);
+    }
+  });
+
+  it('the overlap check knows which side a one-way road\'s lanes are on', () => {
+    const ONE: LaneProfile = ROAD_PRESETS[2]!.profile; // lanes right of the line
+    const pair = (sameWay: boolean) => {
+      const net = new RoadNetwork();
+      net.addSegment(net.addNode([27, 0, 30]), net.addNode([27, 0, 70]), ONE); // lanes towards -x
+      const id = sameWay
+        ? net.addSegment(net.addNode([33, 0, 30]), net.addNode([33, 0, 70]), ONE) // lanes towards -x too: onto the first
+        : net.addSegment(net.addNode([33, 0, 70]), net.addNode([33, 0, 30]), ONE); // lanes towards +x: clear
+      return validate(net, zone, [id], [id]);
+    };
+    expect(pair(false)).toBeNull();
+    expect(pair(true)).toBe('Overlaps another road');
+  });
+
+  it('two-way type: two streets side by side, a median apart; off again draws one road', () => {
+    const { w, ed } = make();
+    ed.setParallel(true);
+    const n0 = w.net.segments.size;
+    draw(ed, [30, 0, 30], [30, 0, 70]);
+    expect(ed.draft!.error).toBeNull();
+    ed.confirm();
+    ed.discard();
+    expect(w.net.segments.size).toBe(n0 + 2);
+    ed.setParallel(false);
+    draw(ed, [70, 0, 30], [70, 0, 70]);
+    ed.confirm();
+    expect(w.net.segments.size).toBe(n0 + 3);
   });
 });
 

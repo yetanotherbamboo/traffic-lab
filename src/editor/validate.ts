@@ -1,3 +1,4 @@
+import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import type { CubicBezier } from '../network/bezier';
 import type { RoadNetwork, RoadSegment } from '../network/network';
@@ -112,7 +113,20 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
     }
 
     // Overlap with roads it doesn't share a junction with (at shared junctions the angle check applies).
-    const mine = sampleCurve(seg.curve, 2, s0 + 0.5, Math.max(s0 + 0.5, s1 - 0.5));
+    // Each road's body (lanes plus sidewalks) as a strip of half-width `hw` around its line shifted
+    // by `shift`: one-way roads have all their lanes on the right of their line.
+    const body = (sg: typeof seg): { shift: number; hw: number } => {
+      const { forward: f, backward: b, laneWidth: w, sidewalk: sw } = sg.profile;
+      const right = f * w + sw, left = b * w + sw;
+      return { shift: (right - left) / 2, hw: (right + left) / 2 };
+    };
+    const along = (sg: typeof seg, pts: { p: Vec3; t: number }[], shift: number): Vec3[] => pts.map(({ p, t }) => {
+      if (shift === 0) return p;
+      const d = sg.curve.derivative(t), l = Math.hypot(d[0], d[2]) || 1;
+      return [p[0] - (d[2] / l) * shift, p[1], p[2] + (d[0] / l) * shift];
+    });
+    const myBody = body(seg);
+    const mine = along(seg, sampleCurve(seg.curve, 2, s0 + 0.5, Math.max(s0 + 0.5, s1 - 0.5)), myBody.shift).map((p) => ({ p }));
     for (const other of net.segments.values()) {
       if (other.id === id || other.a === seg.a || other.a === seg.b || other.b === seg.a || other.b === seg.b) continue;
       // A ring and the roads joining it meet at its junctions (the ring's lanes lie on its outside).
@@ -120,8 +134,9 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
       if (!boxesNear(seg.curve, other.curve, hw + halfWidth(other))) continue;
       const [o0, o1] = net.trimmedRange(other);
       if (o1 - o0 < 0.5) continue;
-      const theirs = sampleCurve(other.curve, 2, o0, o1);
-      const need = hw + halfWidth(other) - 0.5;
+      const theirBody = body(other);
+      const theirs = along(other, sampleCurve(other.curve, 2, o0, o1), theirBody.shift).map((p) => ({ p }));
+      const need = myBody.hw + theirBody.hw - 0.5;
       for (const { p } of mine) {
         for (let k = 0; k + 1 < theirs.length; k++) {
           const a = theirs[k]!.p, b = theirs[k + 1]!.p;

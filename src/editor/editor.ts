@@ -3,10 +3,10 @@ import { type Zone, zoneDistance } from '../env/zone';
 import { CubicBezier } from '../network/bezier';
 import { type LaneProfile, type RoadNetwork, horizontal } from '../network/network';
 import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, moveNode, touchedAround, upgradeRoad } from './ops';
-import { type Pick, pickAt } from './pick';
+import { type Pick, nearestOnSegment, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
-import { type DrawMode, type Shape, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, endDirection, straightShape } from './shape';
+import { type DrawMode, type Shape, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, endDirection, offsetCubic, parallelOffset, straightShape } from './shape';
 import { type Anchor, snapFree, snapPoint } from './snap';
 import { validate } from './validate';
 
@@ -103,6 +103,8 @@ export class Editor {
   snapping = true;
   /** Guide lines used by the last snap. */
   private lines: [Vec3, Vec3][] = [];
+  /** Draw a pair of roads either side of the drawn line (a dual carriageway for one-way types). */
+  parallel = false;
   selection: Pick = null;
   draft: Draft | null = null;
   hover: Marker | null = null;
@@ -164,6 +166,11 @@ export class Editor {
     return this.settle(sn.anchor);
   }
 
+  setParallel(on: boolean): void {
+    this.parallel = on;
+    this.refresh();
+  }
+
   setSnapping(on: boolean): void {
     this.snapping = on;
     this.changed();
@@ -205,8 +212,8 @@ export class Editor {
   /** Continuous mode: the direction the road in progress leaves its start, or null (then it's straight). */
   private startDir(): Vec3 | null {
     const a = this.start;
+    if (a && this.chainDir) return this.chainDir;
     if (!a || a.kind !== 'node' || !this.net.nodes.has(a.id)) return null;
-    if (this.chainDir) return this.chainDir;
     const arms = this.net.arms(a.id);
     if (arms.length !== 1) return null;
     const d = arms[0]!.dir; // points away from the node, back along the road
@@ -252,7 +259,10 @@ export class Editor {
     const shape = this.shape();
     const err = this.outside(a) ?? this.outside(b) ?? this.startProblem(a) ?? (typeof shape === 'string' ? shape : null);
     const profile = ROAD_PRESETS[this.preset]!.profile;
-    const op = (net: RoadNetwork): EditResult => addRoad(net, a, b, profile, typeof shape === 'string' ? straightShape(a.pos, b.pos) : shape);
+    const line = typeof shape === 'string' ? straightShape(a.pos, b.pos) : shape;
+    const op = this.parallel
+      ? (net: RoadNetwork): EditResult => this.addPair(net, a.pos, b.pos, line, profile)
+      : (net: RoadNetwork): EditResult => addRoad(net, a, b, profile, line);
     this.draft = this.preview(op, markers, err);
     this.draft.grips = grips;
     this.draft.lines = this.lines;
@@ -271,6 +281,46 @@ export class Editor {
       };
     }
     this.changed();
+  }
+
+  /**
+   * Parallel mode: two roads either side of the drawn line A → B. With a one-way type the left
+   * one runs the other way (a dual carriageway). Each end joins whatever road or junction lies
+   * under it, found in `net` as it is at that moment (the first road may have split a road).
+   */
+  private addPair(net: RoadNetwork, A: Vec3, B: Vec3, line: Shape, profile: LaneProfile): EditResult {
+    const d = parallelOffset(profile);
+    const oneWay = profile.forward === 0 || profile.backward === 0;
+    const at = (p: Vec3): Anchor => this.exactAnchor(net, p);
+    let changed: number[] = [], touched: number[] = [], cost = 0;
+    for (const side of [1, -1]) {
+      const [q0, q1, q2, q3] = offsetCubic(A, line.c1, line.c2, B, side * d);
+      const r = side === 1 || !oneWay
+        ? addRoad(net, at(q0), at(q3), profile, { c1: q1, c2: q2 })
+        : addRoad(net, at(q3), at(q0), profile, { c1: q2, c2: q1 }); // left of a one-way pair: runs back
+      changed = changed.concat(r.changed);
+      touched = touched.concat(r.touched);
+      cost += r.cost;
+    }
+    return { changed, touched: [...new Set(touched)], cost };
+  }
+
+  /**
+   * What lies exactly at `p` in `net`: a junction or road end within 0.5 m, else a point on a road's
+   * centre line within 0.5 m, else open ground. (Ordinary snapping reaches a road's full width,
+   * which would pull one half of a parallel pair onto the other.)
+   */
+  private exactAnchor(net: RoadNetwork, p: Vec3): Anchor {
+    const zone = this.host.zone;
+    for (const n of net.nodes.values()) {
+      if (Math.hypot(n.pos[0] - p[0], n.pos[2] - p[2]) < 0.5 && nodeConnectable(net, zone, n.id)) return { kind: 'node', id: n.id, pos: n.pos };
+    }
+    for (const seg of net.segments.values()) {
+      if (!segmentEditable(net, zone, seg)) continue;
+      const near = nearestOnSegment(net, seg.id, p[0], p[2]);
+      if (near.dist < 0.5 && near.t > 0.001 && near.t < 0.999) return { kind: 'segment', id: seg.id, t: near.t, pos: near.pos };
+    }
+    return { kind: 'free', pos: [p[0], 0, p[2]] };
   }
 
   /** Angle (whole degrees) between the new road and the nearest road already at its start. */
@@ -314,6 +364,8 @@ export class Editor {
     this.end = null;
     this.bend = 0;
     this.grab = null;
+    // A parallel pair ends either side of the drawn line: carry on from the line's end.
+    if (this.parallel && this.outside({ kind: 'free', pos: B }) === null) next = { kind: 'free', pos: B };
     if (next && this.startProblem(next) === null) {
       this.start = next;
       this.chainDir = dir;

@@ -240,11 +240,11 @@ _Last updated: 2026-11-21_
     - **Shapes** (`src/editor/shape.ts`, Road panel "Shape"): Straight; Curve (a middle grip bows the road through that point, the Bend tool's quadratic); Continuous (circular arc leaving along the road it continues: a chained road's end direction, or the only road at a dead end; up to 75° off that direction, else "Too sharp a turn…"; elsewhere straight with a hint). Switching shape or road type reshapes a pending road.
     - `addRoad` takes optional control points. Draft gained `length` (curve length shown in the info) and `grips` (drawn as dots inside the rings).
     - **Checks:** editor tests for ✓/✕, tap-tap, grips, chaining, Curve, Continuous (tangent at the joint, no junction there) and the shape maths (arc within 0.3% of a circle). Headless Chrome at phone size (390×844) drove real mouse gestures: drag → pending → ✓ → chained tap → ✓ → ✕ → Curve with the middle grip dragged 8 m (built road's midpoint exactly there), no console errors. It also found ✕ leaving a stale hint (fixed: `discard` clears messages).
+  - **Overlay through buildings (2026-11-21):** the editor overlay is drawn a second time after the lit meshes with `depthFunc(GREATER)`, no depth writes and 50% constant alpha (`OVERLAY_GHOST` in `renderer.ts`), so grips, previews, selections and demolition outlines show as a ghost where buildings, trees or vehicles hide them. +1 draw call while the overlay has anything in it. Checked in headless Chrome: a curve's middle grip behind a building now shows.
 
 ### Next
 - [ ] **Road tool, part 2:**
   - guidance: length and angle labels above the finger, guide lines from nearby roads, a snapping toggle, the advisory speed of tight bends ("cars slow to 25 km/h").
-  - grips and the preview line hide behind buildings (the overlay is depth-tested): draw grips on top;
   - Continuous: match the curvature where the new arc meets the previous road (only the direction matches now, so cars may still dip in speed at the join).
   - Later: an Upgrade tool (change a road's type in place), node dragging, drag-to-remove, parallel roads.
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**

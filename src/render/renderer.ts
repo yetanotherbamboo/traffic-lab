@@ -24,6 +24,9 @@ const KITS: Record<KitName, () => Geometry> = {
   box: boxGeometry, roof: roofGeometry, crown: crownGeometry, cone: coneGeometry,
 };
 
+/** Opacity of the editor overlay where something hides it. */
+const OVERLAY_GHOST = 0.5;
+
 export class Renderer {
   private readonly groundProg: Program;
   private readonly roadProg: Program;
@@ -199,6 +202,21 @@ export class Renderer {
       if (kit.instanceCount === 0) continue;
       kit.draw();
       this.drawCalls++;
+    }
+
+    // Editor overlay again, ghosted, only where buildings, trees or vehicles hide it: road grips
+    // and previews stay visible (and grabbable) behind tall buildings.
+    if (this.overlay.instanceCount > 0) {
+      gl.enable(gl.BLEND);
+      gl.blendColor(0, 0, 0, OVERLAY_GHOST);
+      gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
+      gl.depthMask(false);
+      gl.depthFunc(gl.GREATER);
+      this.overlay.draw();
+      this.drawCalls++;
+      gl.depthFunc(gl.LESS);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
     }
 
     // Soft contact shadows last: blended, depth-tested but not written.

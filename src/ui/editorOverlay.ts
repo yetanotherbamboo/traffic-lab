@@ -55,11 +55,13 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
   }
   if (ed.hover) marker(ob, ed.hover, MARKER_COLOR[ed.hover.kind]);
 
-  // Bend tool: grab handles in the middle of every editable road.
+  // Reshape tool: a dot in the middle of every editable road (drag to bend) and a ring on every
+  // junction or road end that can move (drag to move it).
   if (ed.tool === 'bend' && !d) {
     for (const seg of w.net.segments.values()) {
       if (seg.ring === undefined && segmentEditable(w.net, w.zone, seg)) ob.dot(seg.curve.point(0.5), 1.4, OVERLAY.segment);
     }
+    for (const n of w.net.nodes.values()) if (ed.movable(n.id)) ob.ring(n.pos, 2.2, OVERLAY.node);
   }
 
   const sel = ed.selection;

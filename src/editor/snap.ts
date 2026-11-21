@@ -165,3 +165,13 @@ export function snapPoint(net: RoadNetwork, zone: Zone, p: Vec3, tol: number, fr
   const L = Math.round(len);
   return free([o[0] + Math.cos(best) * L, 0, o[2] + Math.sin(best) * L], aligned);
 }
+
+/**
+ * Snaps a point that isn't joining anything (a junction being moved): onto guide lines from other
+ * nodes (not from `skip`, its own position), else to whole metres. `snapping` off: as it is.
+ */
+export function snapFree(net: RoadNetwork, p: Vec3, tol: number, skip: Vec3, snapping = true): { pos: Vec3; guides: [Vec3, Vec3][] } {
+  const pos: Vec3 = [p[0], 0, p[2]];
+  if (!snapping) return { pos, guides: [] };
+  return snapToGuides(net, pos, tol, skip) ?? { pos: [Math.round(pos[0]), 0, Math.round(pos[2])], guides: [] };
+}

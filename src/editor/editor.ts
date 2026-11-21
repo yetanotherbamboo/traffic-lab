@@ -2,12 +2,12 @@ import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import { CubicBezier } from '../network/bezier';
 import { type LaneProfile, type RoadNetwork, horizontal } from '../network/network';
-import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, touchedAround, upgradeRoad } from './ops';
+import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, moveNode, touchedAround, upgradeRoad } from './ops';
 import { type Pick, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
 import { type DrawMode, type Shape, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, endDirection, straightShape } from './shape';
-import { type Anchor, snapPoint } from './snap';
+import { type Anchor, snapFree, snapPoint } from './snap';
 import { validate } from './validate';
 
 export type Tool = 'view' | 'road' | 'bend' | 'select' | 'delete';
@@ -121,6 +121,8 @@ export class Editor {
   /** Direction a chained start continues (the built road's direction at its end). */
   private chainDir: Vec3 | null = null;
   private bendSeg = -1;
+  /** Reshape tool: the junction or road end being dragged, or -1. */
+  private moveId = -1;
   private readonly past: unknown[] = [];
   private readonly future: unknown[] = [];
   /** Bumped on every change, so views know when to refresh. */
@@ -322,6 +324,17 @@ export class Editor {
 
   private editable = (id: number): boolean => segmentEditable(this.net, this.host.zone, this.net.segment(id));
 
+  /**
+   * The Reshape tool may move this junction or road end: inside the zone (not on its border,
+   * where roads continue outside), not on a roundabout, and all its roads editable.
+   */
+  movable = (id: number): boolean => {
+    const net = this.net, n = net.node(id);
+    if (n.ring !== undefined || n.segments.length === 0) return false;
+    if (zoneDistance(this.host.zone, n.pos[0], n.pos[2]) > -1) return false;
+    return n.segments.every((s) => net.segment(s).ring === undefined && this.editable(s));
+  };
+
   // ---------------------------------------------------------------- gestures
 
   /** Finger/mouse down with a drag tool. Returns true if the editor takes the gesture. */
@@ -329,11 +342,16 @@ export class Editor {
     this.message = null;
     if (this.tool === 'road') return this.downRoad(p, tol);
     if (this.tool === 'bend') {
-      const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
+      const pick = pickAt(this.net, p, tol, { node: this.movable, segment: this.editable });
+      if (pick?.kind === 'node') {
+        this.moveId = pick.id;
+        this.move(p, tol);
+        return true;
+      }
       if (pick?.kind !== 'segment' || this.net.segment(pick.id).ring !== undefined) {
         this.message = pick?.kind === 'segment'
           ? 'Roundabouts keep their round shape: change their size with the Edit tool'
-          : 'Drag the middle of a road inside the zone to bend it';
+          : 'Drag a junction or road end to move it, or the middle of a road to bend it';
         this.changed();
         return true; // still swallow the drag so the view doesn't jump
       }
@@ -400,6 +418,12 @@ export class Editor {
         this.bend = bendFrom(this.start.pos, this.end.pos, [p[0], 0, p[2]]);
       }
       this.refresh();
+    } else if (this.tool === 'bend' && this.moveId >= 0) {
+      const id = this.moveId;
+      const to = snapFree(this.net, p, tol, this.net.node(id).pos, this.snapping);
+      this.draft = this.preview((net) => moveNode(net, id, to.pos), [{ pos: to.pos, kind: 'handle' }], null);
+      this.draft.lines = to.guides;
+      this.changed();
     } else if (this.tool === 'bend' && this.bendSeg >= 0) {
       this.draft = this.preview((net) => bendRoad(net, this.bendSeg, p), [{ pos: [p[0], 0, p[2]], kind: 'handle' }], null);
       this.changed();
@@ -439,6 +463,7 @@ export class Editor {
     this.grab = null;
     this.chainDir = null;
     this.bendSeg = -1;
+    this.moveId = -1;
     this.draft = null;
     this.changed();
   }

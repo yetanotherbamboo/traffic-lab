@@ -3,7 +3,7 @@ import type { Vec3 } from '../src/core/math';
 import { itemsHitByRoads } from '../src/env/city';
 import { zoneDistance } from '../src/env/zone';
 import { Editor, ROAD_PRESETS } from '../src/editor/editor';
-import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, setLanes, setTurns, upgradeRoad } from '../src/editor/ops';
+import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, moveNode, setLanes, setTurns, upgradeRoad } from '../src/editor/ops';
 import { convertToRoundabout } from '../src/editor/roundabout';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
 import { CubicBezier } from '../src/network/bezier';
@@ -772,6 +772,61 @@ describe('saving and resetting the city', () => {
     expect(w.sim.stats.vehicles).toBeGreaterThan(0);
     // A save of the new city only fits a world grown from the same seed.
     expect(() => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners).restore(w.snapshot())).toThrow();
+  });
+});
+
+describe('moving junctions (Reshape tool)', () => {
+  const make = () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    return { w, ed };
+  };
+  const nodeAt = (w: World, x: number, z: number) => [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - x, n.pos[2] - z) < 0.01);
+
+  it('drags a road end: the road follows and stays straight; undo puts it back', () => {
+    const { w, ed } = make();
+    ed.setTool('road');
+    ed.down([30, 0, 30], 1.5); ed.move([30, 0, 55], 1.5); ed.up(); ed.confirm(); ed.discard();
+    const end = nodeAt(w, 30, 55)!;
+    ed.setTool('bend');
+    expect(ed.movable(end.id)).toBe(true);
+    expect(ed.down([30.4, 0, 55.3], 1.5)).toBe(true);
+    ed.move([40.3, 0, 60.4], 1.5);
+    expect(ed.draft!.error).toBeNull();
+    ed.up();
+    const moved = w.net.node(end.id);
+    expect([moved.pos[0], moved.pos[2]]).toEqual([40, 60]); // whole metres
+    const seg = w.net.segment(moved.segments[0]!);
+    expect(seg.curve.straight()).toBe(true);
+    ed.undo();
+    expect(nodeAt(w, 30, 55)?.id).toBe(end.id);
+  });
+
+  it('a curved road keeps its bend at the far end', () => {
+    const net = new RoadNetwork();
+    const a = net.addNode([0, 0, 0]), b = net.addNode([40, 0, 0]);
+    const id = net.addSegment(a, b, STREET, [10, 0, 10], [30, 0, 10]);
+    moveNode(net, b, [40, 0, 8]);
+    const c = net.segment(id).curve;
+    expect(c.p1).toEqual([10, 0, 10]); // far end untouched
+    expect([c.p2[0], c.p2[2]]).toEqual([30, 18]); // moved with the end
+    expect([c.p3[0], c.p3[2]]).toEqual([40, 8]);
+  });
+
+  it('the centre crossroads can move a little with traffic running; border joints and rings stay put', () => {
+    const { w, ed } = make();
+    for (let i = 0; i < 300; i++) w.sim.step(0.1);
+    const centre = nodeAt(w, 0, 0)!;
+    expect(ed.movable(centre.id)).toBe(true);
+    expect(ed.apply((n) => moveNode(n, centre.id, [4, 0, 3]))).toBeNull();
+    expect(w.net.node(centre.id).segments.length).toBe(4);
+    for (let i = 0; i < 600; i++) w.sim.step(0.1);
+    expect(w.sim.stats.exited).toBeGreaterThan(0);
+    const border = [...w.net.nodes.values()].find((n) => Math.abs(zoneDistance(TEST_ZONE, n.pos[0], n.pos[2])) < 0.5 && n.segments.length === 2)!;
+    expect(border).toBeDefined();
+    expect(ed.movable(border.id)).toBe(false);
+    expect(ed.apply((n) => convertToRoundabout(n, centre.id))).toBeNull();
+    for (const n of w.net.nodes.values()) if (n.ring !== undefined) expect(ed.movable(n.id)).toBe(false);
   });
 });
 

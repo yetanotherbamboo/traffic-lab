@@ -21,12 +21,12 @@ const ICONS: Record<string, string> = {
   redo: 'M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3',
 };
 
-const TOOLS: [Tool, string][] = [['view', 'Move'], ['road', 'Build'], ['bend', 'Bend'], ['select', 'Edit'], ['delete', 'Remove']];
+const TOOLS: [Tool, string][] = [['view', 'Move'], ['road', 'Build'], ['bend', 'Reshape'], ['select', 'Edit'], ['delete', 'Remove']];
 
 const HINTS: Record<Tool, string> = {
   view: 'Drag to move · pinch or two fingers to zoom and turn',
   road: 'Drag from one point to another, or tap the start and then the end · two fingers move the view',
-  bend: 'Drag the middle of a road to bend it',
+  bend: 'Drag a junction or road end to move it · drag the middle of a road to bend it',
   select: 'Tap a road, junction or roundabout to change it',
   delete: 'Tap a road to remove it',
 };

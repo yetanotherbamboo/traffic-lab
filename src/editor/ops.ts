@@ -251,6 +251,34 @@ export function setLanes(net: RoadNetwork, segId: number, forward: number, backw
 }
 
 /**
+ * Moves a junction or road end to `to`; its roads follow. A straight road stays straight; a curved
+ * one keeps its bend: the control point next to the moved end moves with it (same direction
+ * there), the far one stays. Roads the move takes across others form junctions, as when bending.
+ */
+export function moveNode(net: RoadNetwork, nodeId: number, to: Vec3): EditResult {
+  const node = net.node(nodeId);
+  const dx = to[0] - node.pos[0], dz = to[2] - node.pos[2];
+  if (Math.hypot(dx, dz) < 0.01) return { changed: [], touched: [], cost: 0 };
+  const straight = new Set(node.segments.filter((id) => net.segment(id).curve.straight()));
+  node.pos = [to[0], node.pos[1], to[2]];
+  let cost = 0;
+  for (const id of node.segments) {
+    const seg = net.segment(id);
+    const A = net.node(seg.a).pos, B = net.node(seg.b).pos;
+    if (straight.has(id)) {
+      net.setCurve(id, vec3.add(A, vec3.scale(vec3.sub(B, A), 1 / 3)), vec3.add(A, vec3.scale(vec3.sub(B, A), 2 / 3)));
+    } else {
+      const { p1, p2 } = seg.curve;
+      const shift = (c: Vec3, moved: boolean): Vec3 => (moved ? [c[0] + dx, c[1], c[2] + dz] : c);
+      net.setCurve(id, shift(p1, seg.a === nodeId), shift(p2, seg.b === nodeId));
+    }
+    cost += roadCost(net.segment(id));
+  }
+  const changed = splitCrossings(net, [...node.segments]);
+  return { changed, touched: touchedAround(net, changed), cost };
+}
+
+/**
  * Upgrade: gives a road another type (lanes, widths, sidewalks, speed) and keeps its shape and
  * junctions. A one-way road keeps its direction; a road that already is this type is reversed if
  * it's one-way (as in Cities: Skylines), else refused.

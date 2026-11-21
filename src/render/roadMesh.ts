@@ -101,7 +101,7 @@ function cornerColumns(S: number): Column[] {
 function addSegment(b: Builder, net: RoadNetwork, seg: RoadSegment): void {
   const [s0, s1] = net.trimmedRange(seg);
   if (s1 - s0 < 0.01) return;
-  const n = Math.max(1, Math.ceil((s1 - s0) / STEP));
+  const n = seg.curve.pieces(s0, s1, STEP);
   const stations: Station[] = [];
   for (let k = 0; k <= n; k++) {
     const s = s0 + ((s1 - s0) * k) / n;
@@ -126,8 +126,11 @@ function intersectXZ(p: Vec3, dp: Vec3, q: Vec3, dq: Vec3): [number, number] | n
  * wider than that would fold over itself.
  */
 let cornerRadius = Infinity;
+/** Centre of the last fillet built by `cornerCurve` (null when the corner isn't a fillet). */
+let cornerCentre: Vec3 | null = null;
 function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
   cornerRadius = Infinity;
+  cornerCentre = null;
   const P = vec3.add(a.end, vec3.scale(a.right, a.rightExt));
   const Q = vec3.sub(c.end, vec3.scale(c.right, c.leftExt));
 
@@ -178,6 +181,7 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
   if (a1 - a2 > Math.PI) a2 += Math.PI * 2;
   const r = Math.hypot(T1[0] - C[0], T1[2] - C[2]);
   cornerRadius = r;
+  cornerCentre = C;
   const pts: Vec3[] = [];
   if (La > L + 0.01) pts.push(P);
   for (let k = 0; k <= samples; k++) {
@@ -220,15 +224,27 @@ function addJunction(b: Builder, net: RoadNetwork, nodeId: number): void {
   arms.forEach((a, i) => {
     const next = arms[(i + 1) % arms.length]!;
     // Near-duplicate points (where the kerb line meets the fillet) would give a strip with a
-    // reversed direction, flipping the sidewalk there.
+    // reversed direction, flipping the sidewalk there. Keep the fillet's own points: at the start
+    // the fillet point replaces the road-end point, so the strip leaves along the fillet tangent.
     const pts = cornerCurve(a, next, centre).filter((p, k, all) => k === 0 || Math.hypot(p[0] - all[k - 1]![0], p[2] - all[k - 1]![2]) > 0.1);
     if (pts.length < 2) return;
     // Tight corners get a narrower sidewalk so it can't fold over itself.
     const S = Math.min(a.segment.profile.sidewalk, next.segment.profile.sidewalk, cornerRadius * 0.9);
     if (S <= 0.05) return;
+    // The sidewalk lies on the inside of the fillet, so station directions must be exact: on the
+    // fillet the tangent of its circle, on the short straight kerb pieces either side the kerb
+    // line. (Averaged neighbour directions fold the sidewalk where a short straight meets the arc.)
+    const C = cornerCentre;
     const stations: Station[] = pts.map((p, k) => {
       const prev = pts[Math.max(0, k - 1)]!, nxt = pts[Math.min(pts.length - 1, k + 1)]!;
-      return { p, right: rightOf(horizontal(vec3.sub(nxt, prev))), v: k };
+      const chord = vec3.sub(nxt, prev);
+      let d = chord;
+      if (C && Math.abs(Math.hypot(p[0] - C[0], p[2] - C[2]) - cornerRadius) < 1e-3) {
+        const t: Vec3 = [-(p[2] - C[2]), 0, p[0] - C[0]];
+        d = vec3.dot(t, chord) >= 0 ? t : vec3.scale(t, -1);
+      } else if (k === 0) d = vec3.sub(nxt, p);
+      else if (k === pts.length - 1) d = vec3.sub(p, prev);
+      return { p, right: rightOf(horizontal(d)), v: k };
     });
     b.ribbon(stations, cornerColumns(S), none);
   });

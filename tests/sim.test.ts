@@ -4,7 +4,7 @@ import { TEST_SEED, buildTestNetwork, testSpawners } from '../src/game/testScene
 import { type JunctionControl, type LaneProfile, RoadNetwork } from '../src/network/network';
 import { idmAccel } from '../src/sim/idm';
 import { SIGNAL_GREEN, SIGNAL_RED, SIGNAL_YELLOW } from '../src/sim/junctions';
-import { LaneGraph } from '../src/sim/laneGraph';
+import { LaneGraph, safeSpeeds } from '../src/sim/laneGraph';
 import { Path } from '../src/sim/path';
 import { blinkerSide } from '../src/render/lights';
 import { type Spawner, TrafficSim } from '../src/sim/traffic';
@@ -344,5 +344,57 @@ describe('test city', () => {
     expect(ra.collisions).toBe(0);
     expect(ra.longestStop).toBeLessThan(150);
     expect(a.stats.reroutes).toBeLessThan(a.stats.exited * 0.05);
+  });
+});
+
+describe('curves', () => {
+  /** 200 m straight, a 90° bend of radius R, then 200 m straight; one lane each way, 50 km/h. */
+  function bend(R: number) {
+    const net = new RoadNetwork();
+    const p: LaneProfile = { forward: 1, backward: 1, laneWidth: 3.5, sidewalk: 0, speedLimit: 50 };
+    const k = 0.5523 * R; // cubic approximation of a quarter circle
+    const a = net.addNode([0, 0, 0]), b = net.addNode([200, 0, 0]);
+    const c = net.addNode([200 + R, 0, R]), d = net.addNode([200 + R, 0, R + 200]);
+    net.addSegment(a, b, p);
+    const arc = net.addSegment(b, c, p, [200 + k, 0, 0], [200 + R, 0, R - k]);
+    net.addSegment(c, d, p);
+    const sim = new TrafficSim(new LaneGraph(net), [], 1);
+    return { sim, net, a, d, arc };
+  }
+
+  it('cornering speed profile: capped in the bend, the limit on the straight', () => {
+    const pts: [number, number, number][] = [];
+    for (let x = 0; x <= 100; x += 2) pts.push([x, 0, 0]);
+    for (let i = 1; i <= 20; i++) { const t = (i / 20) * (Math.PI / 2); pts.push([100 + 20 * Math.sin(t), 0, 20 - 20 * Math.cos(t)]); }
+    const safe = safeSpeeds(new Path(pts), 50 / 3.6);
+    expect(safe[pts.length - 5]!).toBeCloseTo(Math.sqrt(3 * 20), 0);
+    expect(safe[10]!).toBeCloseTo(50 / 3.6, 3);
+  });
+
+  it('cars slow down before a tight bend and keep within the cornering speed', () => {
+    for (const R of [25, 40]) {
+      const { sim, a, d, arc } = bend(R);
+      const i = sim.spawn(a, d, { speedFactor: 1 });
+      const lane = (j: number) => sim.graph.lanes[sim.lane[j]!]!;
+      const rLane = R - 1.75; // the forward lane is on the inside of this bend
+      const vCurve = Math.sqrt(3 * rLane);
+      let topStraight = 0, topBend = 0, entry = -1;
+      for (let t = 0; t < 900 && sim.alive[i]; t++) {
+        sim.step(DT);
+        const l = lane(i);
+        if (l.segment === arc) {
+          if (entry < 0) entry = sim.v[i]!;
+          topBend = Math.max(topBend, sim.v[i]!);
+        } else if (entry < 0) topStraight = Math.max(topStraight, sim.v[i]!);
+      }
+      expect(topStraight, `R ${R}: cruising on the straight`).toBeGreaterThan(12);
+      expect(entry, `R ${R}: slowed before the bend`).toBeLessThan(vCurve * 1.08);
+      expect(topBend, `R ${R}: within cornering speed`).toBeLessThan(vCurve * 1.08);
+    }
+  });
+
+  it('gentle bends do not slow cars', () => {
+    const { sim } = bend(120);
+    expect(sim.graph.lanes.some((l) => l.curved)).toBe(false);
   });
 });

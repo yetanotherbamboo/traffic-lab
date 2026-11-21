@@ -456,12 +456,61 @@ export class RoadNetwork {
       const rx = qx - px, rz = qz - pz;
       const t = (rx * -c.dir[2] - rz * -c.dir[0]) / den;
       const u = (a.dir[0] * rz - a.dir[2] * rx) / den;
-      const d = mine === 'a' ? t : u;
+      let d = mine === 'a' ? t : u;
+      // Curved arms: the straight edge lines above only hold at the node. Where the real edges
+      // bend towards each other they meet sooner along the road, so follow them (never less room).
+      const sa = this.segments.get(a.id)!, sc = this.segments.get(c.id)!;
+      if (!sa.curve.straight() || !sc.curve.straight()) {
+        const hit = this.edgeHit(nodeId, sa, a.R, sc, c.L, mine, Math.max(d, 0));
+        if (hit !== null) d = Math.max(d, hit);
+      }
       if (d > 0) trim = Math.max(trim, d + (a.small || c.small ? KERB_ROOM_SMALL : KERB_ROOM));
     };
     pair(arms[i]!, arms[(i + 1) % n]!, 'a');
     pair(arms[(i - 1 + n) % n]!, arms[i]!, 'c');
     return trim;
+  }
+
+  /**
+   * Where the right outer edge of road `a` (offset `ra`) first crosses the left outer edge of its
+   * neighbour `c` (offset `lc`), both measured in the frame pointing away from the node, following
+   * the real curves. Returns the distance along `mine` from the node, or null if they don't meet
+   * within the searched stretch (around twice the straight-line estimate `guess`).
+   */
+  private edgeHit(nodeId: number, a: RoadSegment, ra: number, c: RoadSegment, lc: number, mine: 'a' | 'c', guess: number): number | null {
+    const reach = Math.max(2 * guess + 10, 25);
+    const edge = (seg: RoadSegment, off: number): { x: number[]; z: number[]; s: number[] } => {
+      const out = { x: [] as number[], z: [] as number[], s: [] as number[] };
+      const len = Math.min(seg.curve.length, reach);
+      const fromA = seg.a === nodeId;
+      const n = Math.max(4, seg.curve.pieces(0, len, 1.5));
+      for (let k = 0; k <= n; k++) {
+        const x = (len * k) / n;
+        const t = seg.curve.tAtDistance(fromA ? x : seg.curve.length - x);
+        const p = seg.curve.point(t), d = horizontal(seg.curve.derivative(t));
+        const r = fromA ? rightOf(d) : rightOf(vec3.scale(d, -1));
+        out.x.push(p[0] + r[0] * off);
+        out.z.push(p[2] + r[2] * off);
+        out.s.push(x);
+      }
+      return out;
+    };
+    const A = edge(a, ra), C = edge(c, -lc);
+    let best: number | null = null;
+    for (let i = 0; i + 1 < A.x.length; i++) {
+      const px = A.x[i]!, pz = A.z[i]!, dx = A.x[i + 1]! - px, dz = A.z[i + 1]! - pz;
+      for (let j = 0; j + 1 < C.x.length; j++) {
+        const qx = C.x[j]!, qz = C.z[j]!, ex = C.x[j + 1]! - qx, ez = C.z[j + 1]! - qz;
+        const den = dx * ez - dz * ex;
+        if (Math.abs(den) < 1e-9) continue;
+        const wx = qx - px, wz = qz - pz;
+        const u = (wx * ez - wz * ex) / den, v = (wx * dz - wz * dx) / den;
+        if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+        const x = mine === 'a' ? A.s[i]! + u * (A.s[i + 1]! - A.s[i]!) : C.s[j]! + v * (C.s[j + 1]! - C.s[j]!);
+        if (best === null || x < best) best = x;
+      }
+    }
+    return best;
   }
 
   /** Largest distance from the node centre to where its roads begin (size of the junction area). */

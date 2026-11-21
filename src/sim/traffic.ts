@@ -1,7 +1,7 @@
 import { Rng } from '../core/rng';
 import { type DriverParams, MAX_BRAKE, approachSpeed, idmAccel } from './idm';
 import { type Conflict, JunctionModel, SIGNAL_RED, SIGNAL_YELLOW } from './junctions';
-import type { Lane, LaneGraph } from './laneGraph';
+import { CURVE_BRAKE, type Lane, type LaneGraph, safeSpeedAt } from './laneGraph';
 import { type RouteTable, computeRouteTable } from './router';
 
 /** Floats per pose: front bumper x, y, z, and heading. */
@@ -249,7 +249,7 @@ export class TrafficSim {
     this.enterTime[i] = Infinity;
     this.stuck[i] = 0;
     this.breaking[i] = 0;
-    const v0 = this.graph.lanes[lane]!.speedLimit * this.speedFactor[i]!;
+    const v0 = safeSpeedAt(this.graph.lanes[lane]!, 0) * this.speedFactor[i]!;
     this.v[i] = Math.min(v0 * 0.8, entrySpeed);
     this.acc[i] = 0;
     this.laneVehicles[lane]!.push(i);
@@ -361,17 +361,43 @@ export class TrafficSim {
     const lanes = this.graph.lanes;
     const lane = lanes[laneId]!;
     const f = this.speedFactor[i]!;
-    let v0 = lane.speedLimit * f;
+    let v0 = safeSpeedAt(lane, s) * f; // lower inside bends
     const nx = this.nextOf(i, laneId);
     if (nx >= 0) v0 = Math.min(v0, approachSpeed(lanes[nx]!.speedLimit * f, lane.path.length - s, this.b[i]!));
     return v0;
+  }
+
+  /**
+   * Braking for bends ahead (on this lane and the next one): once reaching a bend's speed by its
+   * start needs CURVE_BRAKE, the driver brakes just hard enough. Infinity when no bend needs it.
+   * (IDM alone only eases off, so cars would still be too fast when the bend begins.)
+   */
+  private bendAccel(i: number, laneId: number, s: number): number {
+    const lanes = this.graph.lanes;
+    const lane = lanes[laneId]!;
+    const v = this.v[i]!, f = this.speedFactor[i]!;
+    let a = Infinity;
+    const check = (bends: Float32Array, offset: number): void => {
+      for (let k = 0; k < bends.length; k += 3) {
+        const d = bends[k]! + offset - s;
+        if (d <= 0.5) continue; // inside it (or past): the cornering speed caps v0 instead
+        const vt = bends[k + 2]! * f;
+        if (v <= vt) continue;
+        const need = (v * v - vt * vt) / (2 * d);
+        if (need >= CURVE_BRAKE) a = Math.min(a, -Math.min(need, MAX_BRAKE));
+      }
+    };
+    if (lane.curved) check(lane.bends, 0);
+    const nx = this.nextOf(i, laneId);
+    if (nx >= 0 && lanes[nx]!.curved) check(lanes[nx]!.bends, lane.path.length);
+    return a;
   }
 
   /** IDM acceleration of vehicle i if it were at (laneId, s), ignoring vehicle `skip`. */
   private followAccel(i: number, laneId: number, s: number, skip = -1): number {
     this.findLeader(i, laneId, s, skip);
     const v = this.v[i]!;
-    return idmAccel(v, this.desiredSpeed(i, laneId, s), this.leadGap, v - this.leadV, this.loadParams(i));
+    return Math.min(idmAccel(v, this.desiredSpeed(i, laneId, s), this.leadGap, v - this.leadV, this.loadParams(i)), this.bendAccel(i, laneId, s));
   }
 
   /** Acceleration to stop with the front bumper `gap` metres ahead. */

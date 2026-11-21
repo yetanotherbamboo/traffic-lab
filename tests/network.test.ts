@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTestNetwork } from '../src/game/testScene';
+import type { Vec3 } from '../src/core/math';
 import { CubicBezier } from '../src/network/bezier';
 import { RoadNetwork } from '../src/network/network';
 import { ROAD_STRIDE, buildRoadMesh } from '../src/render/roadMesh';
@@ -166,5 +167,44 @@ describe('buildRoadMesh', () => {
       const ny = e1[1]! * e2[0]! - e1[0]! * e2[1]!; // y of cross(e1, e2)
       expect(ny).toBeGreaterThanOrEqual(-1e-6);
     }
+  });
+});
+
+describe('junctions with curved arms', () => {
+  it('pull curved roads back far enough that they do not overlap their neighbours', () => {
+    const p = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+    const half = 3.25 + 2.5;
+    for (const bendIn of [8, 12, 15]) {
+      const net = new RoadNetwork();
+      const o = net.addNode([0, 0, 0]);
+      const east = net.addSegment(o, net.addNode([60, 0, 0]), p);
+      net.addSegment(o, net.addNode([-60, 0, 0]), p);
+      // Leaves at 60° and swings back towards the east road.
+      const arm = net.addSegment(o, net.addNode([60, 0, bendIn + 2 * half]), p, [5, 0, 8.66], [30, 0, bendIn + 2 * half]);
+      const drawn = (id: number) => {
+        const seg = net.segment(id);
+        const [s0, s1] = net.trimmedRange(seg);
+        const pts: Vec3[] = [];
+        for (let s = s0; s <= s1; s += 0.5) pts.push(seg.curve.point(seg.curve.tAtDistance(s)));
+        return pts;
+      };
+      const a = drawn(arm), e = drawn(east);
+      let gap = Infinity;
+      for (const q of a) for (const r of e) gap = Math.min(gap, Math.hypot(q[0] - r[0], q[2] - r[2]));
+      expect(gap, `bend ${bendIn}`).toBeGreaterThan(2 * half - 0.3);
+    }
+  });
+
+  it('keep straight junctions as they were', () => {
+    const p = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+    const net = new RoadNetwork();
+    const o = net.addNode([0, 0, 0]);
+    const s1 = net.addSegment(o, net.addNode([60, 0, 0]), p);
+    net.addSegment(o, net.addNode([-60, 0, 0]), p);
+    const s3 = net.addSegment(o, net.addNode([30, 0, 51.96]), p); // straight at 60°
+    // Straight-line edge meeting point: the corner fillet room on top of it.
+    const d = (3.25 + 2.5) / Math.sin(Math.PI / 3) + (3.25 + 2.5) / Math.tan(Math.PI / 3);
+    expect(net.armTrim(o, s1)).toBeCloseTo(d + 3, 3);
+    expect(net.armTrim(o, s3)).toBeCloseTo(d + 3, 3);
   });
 });

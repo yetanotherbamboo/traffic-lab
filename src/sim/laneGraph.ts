@@ -6,7 +6,9 @@ import {
 import { Path } from './path';
 
 const LANE_Y = 0.03; // road surface lift (matches roadMesh LIFT)
-const MAX_LAT_ACCEL = 3.0; // m/s², comfortable cornering
+export const MAX_LAT_ACCEL = 3.0; // m/s², comfortable cornering
+/** Drivers start braking for a bend once reaching its speed needs this much deceleration (m/s²). */
+export const CURVE_BRAKE = 1.3;
 const STRAIGHT_COS = Math.cos((35 * Math.PI) / 180);
 
 export type Turn = 'straight' | 'left' | 'right';
@@ -31,6 +33,12 @@ export interface Lane {
   path: Path;
   /** m/s */
   speedLimit: number;
+  /** Cornering speed (m/s, at speed factor 1) at each path point: the speed limit, or lower in bends. */
+  safe: Float32Array;
+  /** Stretches slower than the speed limit, as [start s, end s, lowest speed] triples. */
+  bends: Float32Array;
+  /** True when the lane has a bend to slow down for. */
+  curved: boolean;
   next: number[];
   prev: number[];
 }
@@ -66,7 +74,7 @@ export class LaneGraph {
     for (const seg of net.segments.values()) {
       const { forward, backward, laneWidth, speedLimit = 50 } = seg.profile;
       const [s0, s1] = net.trimmedRange(seg);
-      const n = Math.max(2, Math.ceil((s1 - s0) / 2));
+      const n = Math.max(2, seg.curve.pieces(s0, s1, 2));
       const centre: Vec3[] = [], rights: Vec3[] = [];
       for (let k = 0; k <= n; k++) {
         const t = seg.curve.tAtDistance(s0 + ((s1 - s0) * k) / n);
@@ -132,9 +140,12 @@ export class LaneGraph {
 
   private add(kind: Lane['kind'], segment: number, node: number, from: number, to: number, index: number,
     turn: Turn | null, path: Path, speedLimit: number): Lane {
+    // Connectors already have one speed for the whole turn (see `link`).
+    const safe = kind === 'road' ? safeSpeeds(path, speedLimit) : new Float32Array(path.count).fill(speedLimit);
+    const bends = slowStretches(path, safe, speedLimit);
     const lane: Lane = {
       id: this.lanes.length, kind, segment, node, fromNode: from, toNode: to, index, group: -1, width: 3.25,
-      turn, path, speedLimit, next: [], prev: [],
+      turn, path, speedLimit, safe, bends, curved: bends.length > 0, next: [], prev: [],
     };
     this.lanes.push(lane);
     return lane;
@@ -248,6 +259,9 @@ export class LaneGraph {
     const pts: Vec3[] = [];
     for (let i = 0; i <= 12; i++) pts.push(curve.point(curve.tAtDistance((curve.length * i) / 12)));
     const path = new Path(pts);
+    // A connector is driven at one speed, from its average radius. (Its Bezier is tighter in the
+    // middle than a circular arc of the same sweep; the tightest radius makes turns needlessly slow
+    // and drivers then reject gaps they could take.)
     const bend = Math.acos(Math.max(-1, Math.min(1, vec3.dot(d0, d1))));
     const radius = bend > 0.05 ? path.length / bend : Infinity;
     const limit = Math.min(a.speedLimit, b.speedLimit, Math.sqrt(MAX_LAT_ACCEL * radius));
@@ -268,4 +282,65 @@ function spread(a: number, b: number, link: (i: number, j: number) => void): voi
     const j0 = Math.floor((i * b) / a), j1 = Math.max(j0, Math.ceil(((i + 1) * b) / a) - 1);
     for (let j = j0; j <= j1; j++) link(i, j);
   }
+}
+
+/**
+ * Radius of curvature (m) at each path point, from the turn between its neighbouring pieces
+ * (Infinity where straight). End points copy their neighbour.
+ */
+export function pathRadii(path: Path): Float64Array {
+  const n = path.count, pts = path.pts;
+  const r = new Float64Array(n).fill(Infinity);
+  for (let k = 1; k + 1 < n; k++) {
+    const ax = pts[k * 3]! - pts[k * 3 - 3]!, az = pts[k * 3 + 2]! - pts[k * 3 - 1]!;
+    const bx = pts[k * 3 + 3]! - pts[k * 3]!, bz = pts[k * 3 + 5]! - pts[k * 3 + 2]!;
+    const la = Math.hypot(ax, az), lb = Math.hypot(bx, bz);
+    if (la < 1e-6 || lb < 1e-6) continue;
+    const turn = Math.abs(Math.atan2(ax * bz - az * bx, ax * bx + az * bz));
+    if (turn > 1e-4) r[k] = (la + lb) / 2 / turn;
+  }
+  if (n > 2) {
+    r[0] = r[1]!;
+    r[n - 1] = r[n - 2]!;
+  }
+  return r;
+}
+
+/** Cornering speed at each point of a path: `sqrt(MAX_LAT_ACCEL · radius)`, at most `limit`. */
+export function safeSpeeds(path: Path, limit: number): Float32Array {
+  const r = pathRadii(path), n = path.count;
+  const out = new Float32Array(n);
+  for (let k = 0; k < n; k++) out[k] = Math.min(limit, Math.sqrt(MAX_LAT_ACCEL * r[k]!));
+  return out;
+}
+
+/** Runs of points noticeably below the limit, as [start s, end s, lowest speed] triples. */
+function slowStretches(path: Path, safe: Float32Array, limit: number): Float32Array {
+  const out: number[] = [];
+  const cum = path.cum, n = safe.length;
+  for (let k = 0; k < n; k++) {
+    if (safe[k]! >= limit - 0.05) continue;
+    const start = k;
+    let low = safe[k]!;
+    while (k + 1 < n && safe[k + 1]! < limit - 0.05) low = Math.min(low, safe[++k]!);
+    out.push(cum[Math.max(0, start - 1)]!, cum[Math.min(n - 1, k + 1)]!, low);
+  }
+  return new Float32Array(out);
+}
+
+/** Safe speed (m/s, speed factor 1) at arc length s along a lane. Allocation-free. */
+export function safeSpeedAt(lane: Lane, s: number): number {
+  if (!lane.curved) return lane.speedLimit;
+  const cum = lane.path.cum, safe = lane.safe, n = cum.length;
+  if (s <= 0) return safe[0]!;
+  if (s >= cum[n - 1]!) return safe[n - 1]!;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid]! <= s) lo = mid;
+    else hi = mid;
+  }
+  const seg = cum[hi]! - cum[lo]!;
+  const t = seg > 0 ? (s - cum[lo]!) / seg : 0;
+  return safe[lo]! + (safe[hi]! - safe[lo]!) * t;
 }

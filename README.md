@@ -42,7 +42,7 @@ In the **Edit** panel of a junction you can choose:
 
 ### Traffic
 
-Cars and vans drive with realistic following distances, change lanes, use their blinkers, give way, wait for gaps, queue at lights and choose their routes. The numbers at the top left show how traffic is doing: average speed, vehicles waiting and trips completed.
+Cars and vans drive with realistic following distances, slow down for bends, change lanes, use their blinkers, give way, wait for gaps, queue at lights and choose their routes. The numbers at the top left show how traffic is doing: average speed, vehicles waiting and trips completed.
 
 ## Running it yourself
 

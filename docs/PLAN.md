@@ -131,7 +131,7 @@ Key principles:
 We go milestone by milestone. At the end of each, tests and the build run, the result is checked on a phone, and the work is committed.
 
 ## Progress
-_Last updated: 2026-11-20_
+_Last updated: 2026-11-21_
 
 ### Done
 - [x] **0. Environment setup:** Node via nvm, Vite + TS (strict) + Vitest, git. Verified on laptop and phone.
@@ -227,12 +227,25 @@ _Last updated: 2026-11-20_
   - **Compact junctions for small roads (2026-11-21):** `isSmall(profile)` (≤ 1 lane each way, lane ≤ 3 m, sidewalk ≤ 1.5 m). In `armTrim`, a corner next to a small road gets 1.5 m kerb room (3 m otherwise), and a junction with a small road has a 3 m minimum trim (5 m otherwise). Junctions without small roads are unchanged. Tests: side lanes and alleys fit at ≤ 75 % of a street's spacing; compact T and alley crossroads face upwards; alley all-way 4-way and a lane joining a street run 15 minutes without collisions.
   - **Entrances (2026-11-21):** `RoadNode.entrance` (saved; takes effect only while `entranceLayout` holds: three roads, two continuing straight with the same lanes, the third with ≤ 1 lane each way). Trims (`entranceTrim`): the through road stops past the side road's carriageway on its side + sidewalk + 1 m; the side road starts at the through road's kerb + 0.5 m. `tooShort` needs only 2 m (`MIN_ROAD_ENTRANCE`) on a stretch ending at an entrance. Always priority with the through road as main road (`junctions.ts`). `addRoad` turns a new T into an entrance when a full junction would leave a road too short and the entrance fits (`preferEntrance`); `anchorProblem` tries an entrance too. `setLanes` at an entrance that would no longer fit: "Not enough room for more lanes here". Junction panel: Type Junction/Entrance (`setEntrance`, refused when a full junction doesn't fit). Closest side road to the centre crossroads: lane 14 m on the avenue / 20 m on the street (was 18 / 25), street 18 / 22 (was 24 / 28). Known limit: the red cross checks both directions, so a one-way lane may fit leaving one way but not the other (its lane lies on one side).
   - **Fix: small roads overlapping at angles (2026-11-21):** entrance trims ignored the angle, so a diagonal lane or alley left its sidewalks over the through road (user screenshot). `entranceTrim` now uses the angle: the side road starts where both its edges clear the through road ((M + e·cos)/sin), and each through-road arm stops past the side road's edge plus M·|cot| on both corners. Entrances need ≥ 70° (`ENTRANCE_MIN_SIN`); sharper joins are full junctions. Mesh: corner sidewalks drop near-duplicate kerb points (a 2 cm backwards strip flipped the sidewalk where a one-way lane's kerb lies on its centreline, also at compact junctions) and are narrowed to 0.9 × the fillet radius. Tests: overlap clearance for entrances at 70–110°, upward-facing meshes for lanes at 30–150° on an avenue (both fail on the old code).
+  - **Curve physics (2026-11-21)** (first step of the road-tool redesign; plan: study of Cities: Skylines road building, then curve-aware roads before curves get easy to draw):
+    - **Cornering speed:** each road lane has a cornering-speed profile (`Lane.safe`: `sqrt(MAX_LAT_ACCEL · radius)` per path point, at most the limit; `pathRadii` from the turn between neighbouring path pieces) and its slow stretches (`Lane.bends`). Inside a bend the desired speed is the cornering speed. Before a bend (on the lane or the next one), drivers brake once reaching the bend's speed needs `CURVE_BRAKE` (1.3 m/s²), just hard enough (`TrafficSim.bendAccel`), because IDM alone only eases off and cars entered bends 20% too fast. Roundabout rings now run at cornering speed (about 25 km/h) instead of the full limit.
+    - **Connectors keep the average-radius speed:** trying the tightest radius made turns slower than real (a turn's Bézier is tighter in the middle than a circular arc), drivers then rejected gaps, and the test city's longest wait doubled (111 → 226 s).
+    - **Curved arms at junctions:** `armTrim` also follows the real curved edges (`RoadNetwork.edgeHit`, only when an arm is curved; never less room than the straight-line estimate), so a road bending back towards its neighbour no longer overlaps it. Straight junctions are unchanged.
+    - **Sampling:** lanes and road meshes take at least one sample per 6° of turning as well as every 2 m (`CubicBezier.pieces`).
+    - **Corner sidewalks:** stations on a kerb fillet use the circle's exact tangent (the sidewalk lies on the inside of the fillet, so averaged directions folded it where a few cm of straight kerb meets the arc; this showed up once the curved ring corners got slightly uneven trims).
+    - **Tests:** cornering profile; cars slow before 25 m and 40 m bends and stay within cornering speed (+8%); gentle bends don't slow cars; curved arm clearance (fails without the fix); straight junction trims unchanged. Mesh and lane-graph build about 0.2 ms slower on the test city.
 
 ### Next
+- [ ] **Road tool redesign** (from the Cities: Skylines study):
+  - one Build tool with modes Straight · Curve (start → control point → end) · Continuous (leaves tangent to the road it starts from, curvature matched);
+  - a pending road with draggable handles and ✓ / ✕ instead of building on release (replaces the drag/tap switch);
+  - chaining: the end of a built road starts the next one;
+  - guidance: length and angle labels above the finger, guide lines from nearby roads, a snapping toggle, the advisory speed of tight bends ("cars slow to 25 km/h").
+  - Later: an Upgrade tool (change a road's type in place), node dragging, drag-to-remove, parallel roads.
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**
 
 ### Known issues / tech debt
-- **Junction sizing:** each road end is trimmed separately (`RoadNetwork.armTrim`), only as far as its neighbours' sidewalk edges require plus 3 m for a rounded kerb (minimum 5 m; straight lane-count tapers keep the long taper). A street crossing an avenue pulls the avenue back only about 9 m, so junctions can be about 24 m apart. Corners are circular fillets. The edge test uses the road direction at the node, so strongly curved roads right at a junction could still clip.
+- **Junction sizing:** each road end is trimmed separately (`RoadNetwork.armTrim`), only as far as its neighbours' sidewalk edges require plus 3 m for a rounded kerb (minimum 5 m; straight lane-count tapers keep the long taper). A street crossing an avenue pulls the avenue back only about 9 m, so junctions can be about 24 m apart. Corners are circular fillets. Curved arms follow their real edges (`edgeHit`), but only against their two neighbours.
 - **Dead ends:** roads have no end caps. Vehicles that end up on a player-made dead end (only via a forced fallback move) are removed there; there are no U-turns.
 - **Junction markings:** there are no stop lines or crosswalks yet.
 - **Lot placement:** lots are placed by sampling along streets, not by extracting real city blocks. Odd-shaped block interiors are filled only with trees.

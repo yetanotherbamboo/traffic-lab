@@ -74,4 +74,33 @@ export class CubicBezier {
     const l0 = this.lut[lo]!, l1 = this.lut[hi]!;
     return (lo + (s - l0) / (l1 - l0)) / LUT_SIZE;
   }
+
+  /** Total turning (radians, in the ground plane) between arc lengths s0 and s1. */
+  turning(s0 = 0, s1 = this.length): number {
+    const t0 = this.tAtDistance(s0), t1 = this.tAtDistance(s1);
+    const N = 24;
+    let total = 0, px = 0, pz = 0;
+    for (let i = 0; i <= N; i++) {
+      const d = this.derivative(t0 + ((t1 - t0) * i) / N);
+      if (i > 0) total += Math.abs(Math.atan2(px * d[2] - pz * d[0], px * d[0] + pz * d[2]));
+      px = d[0];
+      pz = d[2];
+    }
+    return total;
+  }
+
+  /** Number of pieces to sample [s0, s1] with: at most `step` metres and `maxTurn` radians each. */
+  pieces(s0: number, s1: number, step: number, maxTurn = (6 * Math.PI) / 180): number {
+    return Math.max(1, Math.ceil((s1 - s0) / step), Math.ceil(this.turning(s0, s1) / maxTurn));
+  }
+
+  /** True when both control points lie on the line through the end points (within `tol` metres). */
+  straight(tol = 0.05): boolean {
+    const { p0, p1, p2, p3 } = this;
+    const dx = p3[0] - p0[0], dz = p3[2] - p0[2];
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-6) return false;
+    const off = (p: Vec3): number => Math.abs((p[0] - p0[0]) * dz - (p[2] - p0[2]) * dx) / l;
+    return off(p1) <= tol && off(p2) <= tol;
+  }
 }

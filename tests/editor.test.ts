@@ -7,7 +7,7 @@ import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, moveNode, setLanes, setTurns,
 import { convertToRoundabout } from '../src/editor/roundabout';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
 import { CubicBezier } from '../src/network/bezier';
-import { TOO_SHARP, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, offsetCubic, parallelOffset } from '../src/editor/shape';
+import { TOO_SHARP, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, offsetCubic, parallelOffset, tightestRadius } from '../src/editor/shape';
 import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
@@ -1108,6 +1108,53 @@ describe('guide lines', () => {
     ed.setSnapping(false);
     ed.move([60.6, 0, 54.2], 1.5);
     expect(ed.draft!.lines).toEqual([]);
+  });
+});
+
+describe('Continuous: curvature matched at the join', () => {
+  const arc = (A: Vec3, B: Vec3, dir: Vec3, k0 = 0) => {
+    const s = continueShape(A, B, dir, k0);
+    if (typeof s === 'string') throw new Error(s);
+    return new CubicBezier(A, s.c1, s.c2, B);
+  };
+
+  it('curvature(): 1/R on a circle, positive turning from +x towards +z', () => {
+    const c = arc([0, 0, 0], [40, 0, 40], [1, 0, 0]); // quarter circle, R = 40
+    // A cubic quarter circle's curvature wanders by about 2%.
+    for (const t of [0, 0.5, 1]) expect(Math.abs(c.curvature(t) * 40 - 1)).toBeLessThan(0.03);
+    expect(Math.abs(arc([0, 0, 0], [40, 0, -40], [1, 0, 0]).curvature(0.5) * 40 + 1)).toBeLessThan(0.03);
+  });
+
+  it('a bend continuing a bend the same way starts with the curvature the first one ends with', () => {
+    const first = arc([0, 0, 0], [40, 0, 40], [1, 0, 0]); // R 40, ends heading +z
+    const k0 = first.curvature(1);
+    const plain = arc([40, 0, 40], [10, 0, 70], [0, 0, 1]); // R 30 the same way
+    const matched = arc([40, 0, 40], [10, 0, 70], [0, 0, 1], k0);
+    expect(Math.abs(plain.curvature(0) - k0)).toBeGreaterThan(0.005); // a jump of 1/40 → 1/30
+    expect(Math.abs(matched.curvature(0) - k0) / k0).toBeLessThan(0.01);
+    // Same end, same end direction: only the start handle changed.
+    expect(matched.p2).toEqual(plain.p2);
+    expect(tightestRadius(matched)).toBeGreaterThan(0.85 * tightestRadius(plain));
+  });
+
+  it('after a straight road or a bend the other way: the plain arc (no tighter middle)', () => {
+    const plain = arc([0, 0, 0], [40, 0, 20], [1, 0, 0]);
+    for (const k0 of [0, -1 / 60]) expect(arc([0, 0, 0], [40, 0, 20], [1, 0, 0], k0).p1).toEqual(plain.p1);
+  });
+
+  it('chaining Continuous roads in the editor joins them with matching curvature', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.setDrawMode('continuous');
+    ed.down([30, 0, 20], 1.5); ed.move([30, 0, 40], 1.5); ed.up(); ed.confirm(); // straight start
+    ed.tap([60, 0, 70], 1.5); expect(ed.draft!.error).toBeNull(); ed.confirm(); // R 30 arc
+    ed.tap([85, 0, 45], 1.5); expect(ed.draft!.error).toBeNull(); ed.confirm(); // R 25 the same way
+    const segs = [...w.net.segments.values()].slice(-2);
+    const [s1, s2] = segs as [typeof segs[0], typeof segs[0]];
+    const k1 = s1.curve.curvature(1), k2 = s2.curve.curvature(0);
+    expect(w.net.node(s1.b).pos).toEqual(w.net.node(s2.a).pos);
+    expect(Math.abs(k2 - k1) / Math.abs(k1)).toBeLessThan(0.02);
   });
 });
 

@@ -60,7 +60,15 @@ export function curveShape(A: Vec3, B: Vec3, bend: number): Shape {
  * continues) and ends at B, so the two roads join without a kink. Returns an error message when B
  * is too far round to the side or behind.
  */
-export function continueShape(A: Vec3, B: Vec3, dir: Vec3): Shape | string {
+/**
+ * Continuous mode matches the previous road's curvature where they join (no sudden change of
+ * steering) only by resizing the start handle within this range of the arc's own handle. Further
+ * would tighten the curve's middle too much: after a straight road, full matching halves the
+ * tightest radius (cars slower), so there the plain arc is kept.
+ */
+const MATCH_MIN = 0.8, MATCH_MAX = 1.25;
+
+export function continueShape(A: Vec3, B: Vec3, dir: Vec3, k0 = 0): Shape | string {
   const cx = B[0] - A[0], cz = B[2] - A[2];
   const L = Math.hypot(cx, cz);
   if (L < 1e-6) return straightShape(A, B);
@@ -74,10 +82,17 @@ export function continueShape(A: Vec3, B: Vec3, dir: Vec3): Shape | string {
   const k = (4 / 3) * Math.tan(phi / 2) * R;
   // End direction: the start direction mirrored in the chord.
   const ex = 2 * cos * ux - dir[0], ez = 2 * cos * uz - dir[2];
-  return {
-    c1: [A[0] + dir[0] * k, 0, A[2] + dir[2] * k],
-    c2: [B[0] - ex * k, 0, B[2] - ez * k],
-  };
+  const c2: Vec3 = [B[0] - ex * k, 0, B[2] - ez * k];
+  // Curvature at the start is 2h / (3a²) for start handle length a, where h is how far c2 lies to
+  // the side of the start direction: choose a so it equals k0, the previous road's curvature,
+  // when that bends the same way and needs only a modest change.
+  let a = k;
+  const h = dir[0] * (c2[2] - A[2]) - dir[2] * (c2[0] - A[0]);
+  if (k0 * h > 1e-9) {
+    const want = Math.sqrt((2 * h) / (3 * k0));
+    if (want >= MATCH_MIN * k && want <= MATCH_MAX * k) a = want;
+  }
+  return { c1: [A[0] + dir[0] * a, 0, A[2] + dir[2] * a], c2 };
 }
 
 /** Unit direction a shaped road arrives at B with (for chaining the next road). */

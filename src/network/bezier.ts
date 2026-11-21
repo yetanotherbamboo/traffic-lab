@@ -103,4 +103,14 @@ export class CubicBezier {
     const off = (p: Vec3): number => Math.abs((p[0] - p0[0]) * dz - (p[2] - p0[2]) * dx) / l;
     return off(p1) <= tol && off(p2) <= tol;
   }
+
+  /** Signed curvature (1/m) in the ground plane at t: positive turning right (towards +z from +x). */
+  curvature(t: number): number {
+    const d = this.derivative(t);
+    const u = 1 - t, { p0, p1, p2, p3 } = this;
+    const ax = 6 * u * (p2[0] - 2 * p1[0] + p0[0]) + 6 * t * (p3[0] - 2 * p2[0] + p1[0]);
+    const az = 6 * u * (p2[2] - 2 * p1[2] + p0[2]) + 6 * t * (p3[2] - 2 * p2[2] + p1[2]);
+    const l = Math.hypot(d[0], d[2]);
+    return l < 1e-9 ? 0 : (d[0] * az - d[2] * ax) / (l * l * l);
+  }
 }

@@ -125,6 +125,8 @@ export class Editor {
   private grabbedOld = false;
   /** Direction a chained start continues (the built road's direction at its end). */
   private chainDir: Vec3 | null = null;
+  /** ...and its signed curvature there (1/m), for Continuous mode to match. */
+  private chainK = 0;
   private bendSeg = -1;
   /** Reshape tool: the junction or road end being dragged, or -1. */
   private moveId = -1;
@@ -220,6 +222,21 @@ export class Editor {
     return [-d[0], 0, -d[2]];
   }
 
+  /**
+   * Continuous mode: the signed curvature (1/m) the road being continued has where it meets the
+   * start, measured in the direction of travel onto the new road (0 if none).
+   */
+  private startCurvature(): number {
+    const a = this.start;
+    if (a && this.chainDir) return this.chainK;
+    if (!a || a.kind !== 'node' || !this.net.nodes.has(a.id)) return 0;
+    const segs = this.net.node(a.id).segments;
+    if (segs.length !== 1) return 0;
+    const seg = this.net.segment(segs[0]!);
+    // Arriving along the road: forwards if it ends here, backwards (curvature flips) if it starts here.
+    return seg.b === a.id ? seg.curve.curvature(1) : -seg.curve.curvature(0);
+  }
+
   /** Continuous mode has nothing to continue from this start. */
   get noContinuation(): boolean {
     return this.drawMode === 'continuous' && this.start !== null && this.startDir() === null;
@@ -231,7 +248,7 @@ export class Editor {
     if (this.drawMode === 'curve') return curveShape(A, B, this.bend);
     if (this.drawMode === 'continuous') {
       const d = this.startDir();
-      if (d) return continueShape(A, B, d);
+      if (d) return continueShape(A, B, d, this.startCurvature());
     }
     return straightShape(A, B);
   }
@@ -354,6 +371,7 @@ export class Editor {
     const shape = this.shape();
     const A = this.start!.pos, B = this.end!.pos;
     const dir = typeof shape === 'string' ? null : endDirection(A, B, shape);
+    const endK = typeof shape === 'string' ? 0 : new CubicBezier(A, shape.c1, shape.c2, B).curvature(1);
     this.commit(d.candidate, d.demolish, d.cost + d.demolishCost);
     // Chain: carry on from the node now at the end.
     const net = this.net;
@@ -369,6 +387,7 @@ export class Editor {
     if (next && this.startProblem(next) === null) {
       this.start = next;
       this.chainDir = dir;
+      this.chainK = endK;
       this.message = null;
     } else {
       this.start = null;

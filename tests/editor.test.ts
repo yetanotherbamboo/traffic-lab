@@ -39,14 +39,14 @@ function healthy(sim: TrafficSim): boolean {
 describe('zone split', () => {
   it('cuts roads at the construction-zone border into editable and fixed parts', () => {
     const net = zoned();
-    expect(net.segments.size).toBe(buildTestNetwork().segments.size + 6); // the 6 roads leaving the scene
+    expect(net.segments.size).toBe(buildTestNetwork().segments.size + 4); // the 4 roads out of the centre
     for (const seg of net.segments.values()) {
       const m = seg.curve.point(0.5);
       expect(segmentEditable(net, zone, seg)).toBe(zoneDistance(zone, m[0], m[2]) < 0);
     }
     // Boundary nodes join identical roads in a straight line: no junction surface, no seam.
     const boundary = [...net.nodes.values()].filter((n) => Math.abs(zoneDistance(zone, n.pos[0], n.pos[2])) < BOUNDARY_TOL);
-    expect(boundary.length).toBe(6);
+    expect(boundary.length).toBe(4);
     for (const n of boundary) expect(net.isJunction(n.id)).toBe(false);
   });
 
@@ -122,7 +122,7 @@ describe('edit operations', () => {
     };
     expect(check((n) => addRoad(n, free(-50, -50), free(-47, -50), STREET))).toMatch(/short/);
     expect(check((n) => addRoad(n, free(-50, -50), free(60, -50), STREET))).toBeNull();
-    expect(check((n) => addRoad(n, free(130, 40), free(170, 45), STREET))).toMatch(/zone/);
+    expect(check((n) => addRoad(n, free(60, 40), free(108, 45), STREET))).toMatch(/zone/);
     // Parallel to the arterial, 6 m off its centreline: overlaps it.
     expect(check((n) => addRoad(n, free(-50, 6), free(-20, 6), STREET))).toMatch(/Overlaps/);
     // Very sharp angle next to the central east-west arterial.
@@ -527,19 +527,29 @@ describe('saving and resetting the city', () => {
     expect(again.sim.stats.vehicles).toBeGreaterThan(0);
   });
 
-  it('reset goes back to the starting city in one undoable step', () => {
+  it('reset makes a new city from a new seed and forgets the old history', () => {
     const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
-    const start = w.snapshot();
+    const start = JSON.stringify(w.snapshot());
+    const lots = JSON.stringify(w.city.lots.map((l) => [l.cx, l.cz]));
     const ed = new Editor(w);
     ed.setTool('road');
     ed.down([30, 0, 30], 1.5);
     ed.move([30, 0, 55], 1.5);
     ed.up();
-    const edited = JSON.stringify(w.snapshot());
-    expect(edited).not.toBe(JSON.stringify(start));
-    ed.resetTo(start);
-    expect(JSON.stringify(w.snapshot())).toBe(JSON.stringify(start));
-    ed.undo();
-    expect(JSON.stringify(w.snapshot())).toBe(edited);
+    expect(ed.canUndo).toBe(true);
+
+    w.regenerate(buildTestNetwork(), TEST_SEED + 1);
+    ed.startOver('new city');
+    expect(ed.canUndo).toBe(false);
+    expect(w.spent).toBe(0);
+    expect(w.demolished.size).toBe(0);
+    expect(w.snapshot().seed).toBe(TEST_SEED + 1);
+    expect(JSON.stringify(w.city.lots.map((l) => [l.cx, l.cz]))).not.toBe(lots); // other buildings
+    // Same roads as any fresh start.
+    expect(JSON.stringify(w.snapshot().net)).toBe(JSON.stringify(JSON.parse(start).net));
+    for (let i = 0; i < 300; i++) w.sim.step(0.1);
+    expect(w.sim.stats.vehicles).toBeGreaterThan(0);
+    // A save of the new city only fits a world grown from the same seed.
+    expect(() => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners).restore(w.snapshot())).toThrow();
   });
 });

@@ -4,7 +4,7 @@ A browser game about building and redesigning roads, with a realistic traffic si
 
 **▶ Play: https://yetanotherbamboo.github.io/traffic-lab/**
 
-Traffic Lab is an early test version. Your city is saved in your browser, so you can come back to it later; **↺ Reset** (top right) starts over.
+Traffic Lab is an early test version. Your city is saved in your browser, so you can come back to it later; **↺ Reset** (top right) starts over in a brand-new city with different buildings.
 
 **Add it to your home screen** to play full screen like an app:
 
@@ -26,7 +26,7 @@ The toolbar at the bottom has the tools:
 | **Remove** | Tap a road to remove it. |
 | **Undo / Redo** | Step back and forward through your changes. |
 
-You can only build inside the bright construction zone; the darker city around it is context.
+You redesign one junction: you can only build inside the bright construction zone around it, and the darker city around it is context. (Editing a whole city is planned as a separate game mode.)
 
 ### Junctions
 

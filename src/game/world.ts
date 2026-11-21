@@ -10,6 +10,8 @@ import { type Spawner, TrafficSim } from '../sim/traffic';
 const SINK_TIME = 0.9; // s, demolished buildings sink into the ground
 
 interface Snapshot {
+  /** The city's seed: buildings and traffic. Restoring needs a world built with the same seed. */
+  seed: number;
   net: NetworkData;
   demolished: number[];
   spent: number;
@@ -21,11 +23,12 @@ interface Snapshot {
  * restarts. DOM- and WebGL-free; the app re-uploads meshes when `version` changes.
  */
 export class World implements EditorHost {
-  net: RoadNetwork;
-  graph: LaneGraph;
-  sim: TrafficSim;
-  readonly city: City;
-  readonly spawners: Spawner[];
+  net!: RoadNetwork;
+  graph!: LaneGraph;
+  sim!: TrafficSim;
+  city!: City;
+  spawners!: Spawner[];
+  seed!: number;
   readonly demolished = new Set<number>();
   /** Items currently sinking: id → seconds since demolition. */
   private readonly sinking = new Map<number, number>();
@@ -37,13 +40,26 @@ export class World implements EditorHost {
   cityVersion = 0;
   private edits = 0;
 
-  constructor(net: RoadNetwork, readonly zone: Zone, readonly seed: number, spawners: (net: RoadNetwork) => Spawner[]) {
-    splitAtZone(net, zone);
+  constructor(net: RoadNetwork, readonly zone: Zone, seed: number, private readonly makeSpawners: (net: RoadNetwork) => Spawner[]) {
+    this.regenerate(net, seed);
+  }
+
+  /** Replaces everything with a fresh starting network and a city grown from `seed` (no traffic yet). */
+  regenerate(net: RoadNetwork, seed: number): void {
+    splitAtZone(net, this.zone);
+    this.seed = seed;
     this.net = net;
-    this.spawners = spawners(net);
-    this.city = generateCity(net, zone, seed);
+    this.spawners = this.makeSpawners(net);
+    this.city = generateCity(net, this.zone, seed);
     this.graph = new LaneGraph(net);
     this.sim = new TrafficSim(this.graph, this.spawners, seed);
+    this.demolished.clear();
+    this.sinking.clear();
+    this.spent = 0;
+    this.edits = 0;
+    this.lastDropped = 0;
+    this.version++;
+    this.cityVersion++;
   }
 
   network(): RoadNetwork {
@@ -90,11 +106,12 @@ export class World implements EditorHost {
   }
 
   snapshot(): Snapshot {
-    return { net: this.net.toData(), demolished: [...this.demolished], spent: this.spent };
+    return { seed: this.seed, net: this.net.toData(), demolished: [...this.demolished], spent: this.spent };
   }
 
   restore(s: unknown): void {
     const snap = s as Snapshot;
+    if (snap.seed !== this.seed) throw new Error('Snapshot belongs to a city with another seed');
     this.demolished.clear();
     for (const id of snap.demolished) this.demolished.add(id);
     this.sinking.clear();

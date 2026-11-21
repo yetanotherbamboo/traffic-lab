@@ -20,8 +20,8 @@ describe('zone', () => {
     expect(sdRoundRect(0, 0, 10, 10, 2)).toBeCloseTo(-10);
     expect(sdRoundRect(15, 0, 10, 10, 2)).toBeCloseTo(5);
     expect(zoneDistance(TEST_ZONE, 0, 0)).toBeLessThan(0);
-    expect(zoneDistance(TEST_ZONE, 180, 0)).toBeGreaterThan(0);
-    expect(contextDistance(TEST_ZONE, 180, 0)).toBeLessThan(0);
+    expect(zoneDistance(TEST_ZONE, 150, 0)).toBeGreaterThan(0);
+    expect(contextDistance(TEST_ZONE, 150, 0)).toBeLessThan(0);
   });
 });
 

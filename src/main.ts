@@ -31,36 +31,45 @@ if (!gl) {
 const zone = TEST_ZONE;
 const camera = new OrbitCamera();
 camera.bounds = zone.hx * zone.contextScale;
-camera.maxDistance = 700;
+camera.maxDistance = 450;
 const controls = new CameraController(canvas, camera);
 
-const t0 = performance.now();
-const world = new World(buildTestNetwork(), zone, TEST_SEED, testSpawners);
-const genMs = performance.now() - t0;
-
 // ---------------------------------------------------------------- saving
-// The player's city (roads, demolished buildings, money spent) lives in this browser's storage,
-// saved after every change. Bump the key when the starting city changes, so old saves don't
-// replace the new one. Storage can be missing (private windows): the game then just doesn't save.
-const SAVE_KEY = 'traffic-lab:city:v2';
-const startCity = world.snapshot();
-const startJson = JSON.stringify(startCity);
-try {
-  const raw = localStorage.getItem(SAVE_KEY);
-  if (raw) world.restore(JSON.parse(raw));
-} catch {
-  world.restore(startCity); // unreadable save: start fresh
-  try { localStorage.removeItem(SAVE_KEY); } catch { /* no storage */ }
+// The player's city (its seed, roads, demolished buildings, money spent) lives in this browser's
+// storage, saved after every change. Bump the key when the starting city or the save format
+// changes, so old saves are dropped. Storage can be missing (private windows): no saving then.
+const SAVE_KEY = 'traffic-lab:city:v3';
+function loadSave(): { seed: number } | null {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    const save = raw ? (JSON.parse(raw) as { seed?: unknown }) : null;
+    return save && typeof save.seed === 'number' ? (save as { seed: number }) : null;
+  } catch {
+    return null;
+  }
 }
 function saveCity(): void {
-  try {
-    const json = JSON.stringify(world.snapshot());
-    if (json === startJson) localStorage.removeItem(SAVE_KEY);
-    else localStorage.setItem(SAVE_KEY, json);
-  } catch { /* no storage, or full */ }
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(world.snapshot())); } catch { /* no storage, or full */ }
+}
+/** A fresh seed for a new city (UI only: the simulation itself stays seeded and deterministic). */
+function newSeed(): number {
+  return crypto.getRandomValues(new Uint32Array(1))[0]! >>> 1;
 }
 
-for (let i = 0; i < 900; i++) world.sim.step(SIM_STEP); // warm up 90 s so the streets aren't empty
+const t0 = performance.now();
+const saved = loadSave();
+const world = new World(buildTestNetwork(), zone, saved?.seed ?? TEST_SEED, testSpawners);
+const genMs = performance.now() - t0;
+if (saved) {
+  try {
+    world.restore(saved);
+  } catch {
+    world.regenerate(buildTestNetwork(), saved.seed); // unreadable save: start this city fresh
+  }
+}
+
+const warmUp = (): void => { for (let i = 0; i < 900; i++) world.sim.step(SIM_STEP); }; // 90 s so the streets aren't empty
+warmUp();
 const vehicleData = new Float32Array(world.sim.capacity * LIT_STRIDE);
 const vanData = new Float32Array(world.sim.capacity * LIT_STRIDE);
 const vehicleCounts: VehicleCounts = { cars: 0, vans: 0 };
@@ -75,7 +84,11 @@ let props = new JunctionProps(world.sim);
 const editor = new Editor(world);
 const ui = new EditorUI(editor, world);
 document.getElementById('reset')!.addEventListener('click', () => {
-  if (confirm('Reset the city to the start? Your roads are removed (Undo brings them back).')) editor.resetTo(startCity);
+  if (!confirm('Start over in a new city? Your roads are removed for good.')) return;
+  world.regenerate(buildTestNetwork(), newSeed());
+  warmUp();
+  editor.startOver('A new city: the junction is yours to rebuild');
+  saveCity();
 });
 const overlay = new OverlayBuilder();
 

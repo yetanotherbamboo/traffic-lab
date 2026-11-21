@@ -18,8 +18,8 @@ export function testSpawners(net: RoadNetwork): Spawner[] {
   return out;
 }
 
-/** Buildable area (280 m square) around the central crossroad; the visible city extends 1.6 times as far. */
-export const TEST_ZONE: Zone = { cx: 0, cz: 0, hx: 140, hz: 140, radius: 20, contextScale: 1.6 };
+/** Buildable area (200 m square) around the central crossroad, short of the ring street; the visible city extends 1.9 times as far. */
+export const TEST_ZONE: Zone = { cx: 0, cz: 0, hx: 100, hz: 100, radius: 40, contextScale: 1.9 };
 export const TEST_SEED = 20261119;
 
 /**
@@ -28,7 +28,7 @@ export const TEST_SEED = 20261119;
  */
 export function buildTestNetwork(): RoadNetwork {
   const net = new RoadNetwork();
-  const R = 115; // ring street distance from the centre
+  const R = 150; // ring street distance from the centre
   const c = net.addNode([0, 0, 0]);
   const w = net.addNode([-R, 0, 0]);
   const e = net.addNode([R, 0, 0]);
@@ -45,14 +45,14 @@ export function buildTestNetwork(): RoadNetwork {
   const sw = net.addNode([-R, 0, R]);
   net.addSegment(w, nw, LOCAL);
   net.addSegment(nw, n, LOCAL);
-  net.addSegment(n, e, LOCAL, [R * 0.55, 0, -R], [R, 0, -R * 0.55]);
+  net.addSegment(n, e, LOCAL, [R * 0.5, 0, -R], [R, 0, -R * 0.5]);
   net.addSegment(e, se, LOCAL);
   net.addSegment(se, s, LOCAL);
   net.addSegment(s, sw, ONE_WAY);
   net.addSegment(sw, w, LOCAL);
 
   // Roads continuing out of the scene so the city reads as part of something bigger.
-  const out = 320;
+  const out = 270;
   net.addSegment(w, net.addNode([-out, 0, 0]), ARTERIAL);
   net.addSegment(e, net.addNode([out, 0, 0]), ARTERIAL);
   net.addSegment(n, net.addNode([0, 0, -out]), LOCAL);

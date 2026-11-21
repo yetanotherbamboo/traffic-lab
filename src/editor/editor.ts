@@ -382,15 +382,13 @@ export class Editor {
     return this.future.length > 0;
   }
 
-  /** Puts the whole world back to `snapshot` (e.g. the starting city) as one undoable step. */
-  resetTo(snapshot: unknown): void {
+  /** After the host replaced the whole world (a new city): forgets history and selection. */
+  startOver(message: string): void {
     this.cancel();
-    this.past.push(this.host.snapshot());
-    if (this.past.length > HISTORY_LIMIT) this.past.shift();
+    this.past.length = 0;
     this.future.length = 0;
-    this.host.restore(snapshot);
     this.selection = null;
-    this.message = 'City reset to the start · Undo brings your roads back';
+    this.message = message;
     this.changed();
   }
 

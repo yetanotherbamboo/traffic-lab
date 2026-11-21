@@ -126,11 +126,16 @@ function intersectXZ(p: Vec3, dp: Vec3, q: Vec3, dq: Vec3): [number, number] | n
  * wider than that would fold over itself.
  */
 let cornerRadius = Infinity;
-/** Centre of the last fillet built by `cornerCurve` (null when the corner isn't a fillet). */
+/** Centre and radius of the last fillet built by `cornerCurve` (null when the corner isn't a fillet). */
 let cornerCentre: Vec3 | null = null;
+let cornerFillet = Infinity;
+/** Outside corners (e.g. the outside of a bend): kerb radius (m), and how far out the kerbs may meet (× the road ends' distance). */
+const OUTER_KERB_R = 4;
+const MITRE_REACH = 2.5;
 function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
   cornerRadius = Infinity;
   cornerCentre = null;
+  cornerFillet = Infinity;
   const P = vec3.add(a.end, vec3.scale(a.right, a.rightExt));
   const Q = vec3.sub(c.end, vec3.scale(c.right, c.leftExt));
 
@@ -143,7 +148,31 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
     return pts;
   }
   if (gap > Math.PI - 0.05) {
-    // Wide (reflex) gap: sweep an arc around the node so the surface stays convex around the centre.
+    // Wide (reflex) gap, e.g. the outside of a bend: carry both outer kerbs on until they meet and
+    // round that corner a little, like a street corner. (Sweeping an arc around the node made a
+    // big round blob there.) Only where the kerbs meet behind both road ends and not too far out.
+    const hit = intersectXZ(P, a.dir, Q, c.dir);
+    if (hit && hit[0] < 0 && hit[1] < 0) {
+      const X = vec3.add(P, vec3.scale(a.dir, hit[0]));
+      const reach = Math.max(Math.hypot(P[0] - centre[0], P[2] - centre[2]), Math.hypot(Q[0] - centre[0], Q[2] - centre[2]));
+      if (Math.hypot(X[0] - centre[0], X[2] - centre[2]) < MITRE_REACH * reach) {
+        const pts = fillet(P, Q, a, c, hit, samples, OUTER_KERB_R);
+        // The surface is a fan from the node: the kerb must go round it (angles increasing) and
+        // keep clear of it. A one-way road's outer edge is its own centre line, through the node,
+        // so there the kerbs meet at the node itself: keep the arc below instead.
+        let ok = true;
+        for (let k = 0; k < pts.length && ok; k++) {
+          const p = pts[k]!, q = pts[k + 1];
+          if (Math.hypot(p[0] - centre[0], p[2] - centre[2]) < 1) ok = false;
+          else if (q && (p[0] - centre[0]) * (q[2] - centre[2]) - (p[2] - centre[2]) * (q[0] - centre[0]) <= 0) ok = false;
+        }
+        if (ok) return pts;
+        cornerRadius = Infinity;
+        cornerCentre = null;
+        cornerFillet = Infinity;
+      }
+    }
+    // Otherwise sweep an arc around the node so the surface stays convex around the centre.
     const ang = (p: Vec3): number => Math.atan2(p[2] - centre[2], p[0] - centre[0]);
     const r0 = Math.hypot(P[0] - centre[0], P[2] - centre[2]);
     const r1 = Math.hypot(Q[0] - centre[0], Q[2] - centre[2]);
@@ -165,12 +194,24 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
     for (let k = 0; k <= samples; k++) pts.push(vec3.add(P, vec3.scale(vec3.sub(Q, P), k / samples)));
     return pts;
   }
+  return fillet(P, Q, a, c, hit, samples, Infinity);
+}
+
+/**
+ * Circular fillet between the kerb line through P (along a.dir) and the one through Q (along
+ * c.dir), which meet at P + a.dir·hit[0] = Q + c.dir·hit[1] (both behind the road ends). With
+ * `maxR` finite (an outside corner) the radius is at most that and the kerb runs straight up to
+ * the fillet; with Infinity (an inside corner) the fillet is as large as the shorter side allows.
+ * Sets `cornerCentre`, and `cornerRadius` for inside corners only: a sidewalk outside a fillet
+ * can't fold, so it needn't narrow.
+ */
+function fillet(P: Vec3, Q: Vec3, a: Arm, c: Arm, hit: [number, number], samples: number, maxR: number): Vec3[] {
   // Circular fillet tangent to both kerb lines (a quadratic curve would bend tighter than the
   // sidewalk is wide at sharp corners, folding the corner sidewalk over itself).
   const X = vec3.add(P, vec3.scale(a.dir, hit[0]));
   const La = -hit[0], Lc = -hit[1];
-  const L = Math.min(La, Lc);
   const half = Math.acos(Math.max(-1, Math.min(1, vec3.dot(a.dir, c.dir)))) / 2; // half the angle at X
+  const L = Math.min(La, Lc, Number.isFinite(maxR) ? maxR / Math.tan(half) : Infinity);
   const T1 = vec3.add(X, vec3.scale(a.dir, L));
   const T2 = vec3.add(X, vec3.scale(c.dir, L));
   const bis = horizontal(vec3.add(a.dir, c.dir));
@@ -180,7 +221,8 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
   if (a2 - a1 > Math.PI) a2 -= Math.PI * 2;
   if (a1 - a2 > Math.PI) a2 += Math.PI * 2;
   const r = Math.hypot(T1[0] - C[0], T1[2] - C[2]);
-  cornerRadius = r;
+  cornerRadius = Number.isFinite(maxR) ? Infinity : r;
+  cornerFillet = r;
   cornerCentre = C;
   const pts: Vec3[] = [];
   if (La > L + 0.01) pts.push(P);
@@ -217,6 +259,10 @@ function addJunction(b: Builder, net: RoadNetwork, nodeId: number): void {
   b.push(vec3.add(hub, [0, LIFT, 0]), up, 0, 0, none, MAT_ASPHALT);
   for (const p of ring) b.push(vec3.add(p, [0, LIFT, 0]), up, 0, 0, none, MAT_ASPHALT);
   for (let k = 0; k < ring.length; k++) {
+    // Skip slivers with no area (ring points in line with the hub, e.g. along a one-way road's
+    // centre line, which runs through the node): their facing is only rounding noise.
+    const p = ring[k]!, q = ring[(k + 1) % ring.length]!;
+    if (Math.abs((p[0] - hub[0]) * (q[2] - hub[2]) - (p[2] - hub[2]) * (q[0] - hub[0])) < 1e-3) continue;
     b.i.push(c0, c0 + 1 + ((k + 1) % ring.length), c0 + 1 + k);
   }
 
@@ -239,7 +285,7 @@ function addJunction(b: Builder, net: RoadNetwork, nodeId: number): void {
       const prev = pts[Math.max(0, k - 1)]!, nxt = pts[Math.min(pts.length - 1, k + 1)]!;
       const chord = vec3.sub(nxt, prev);
       let d = chord;
-      if (C && Math.abs(Math.hypot(p[0] - C[0], p[2] - C[2]) - cornerRadius) < 1e-3) {
+      if (C && Math.abs(Math.hypot(p[0] - C[0], p[2] - C[2]) - cornerFillet) < 1e-3) {
         const t: Vec3 = [-(p[2] - C[2]), 0, p[0] - C[0]];
         d = vec3.dot(t, chord) >= 0 ? t : vec3.scale(t, -1);
       } else if (k === 0) d = vec3.sub(nxt, p);

@@ -3,7 +3,7 @@ import { buildTestNetwork } from '../src/game/testScene';
 import type { Vec3 } from '../src/core/math';
 import { CubicBezier } from '../src/network/bezier';
 import { RoadNetwork } from '../src/network/network';
-import { ROAD_STRIDE, buildRoadMesh } from '../src/render/roadMesh';
+import { MAT_ASPHALT, ROAD_STRIDE, buildRoadMesh } from '../src/render/roadMesh';
 
 describe('CubicBezier', () => {
   it('measures a straight line exactly', () => {
@@ -206,5 +206,46 @@ describe('junctions with curved arms', () => {
     const d = (3.25 + 2.5) / Math.sin(Math.PI / 3) + (3.25 + 2.5) / Math.tan(Math.PI / 3);
     expect(net.armTrim(o, s1)).toBeCloseTo(d + 3, 3);
     expect(net.armTrim(o, s3)).toBeCloseTo(d + 3, 3);
+  });
+});
+
+describe('bends between roads (2-road junctions)', () => {
+  const AVENUE = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 };
+  const STREET = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
+  const ONEWAY = { forward: 2, backward: 0, laneWidth: 3.25, sidewalk: 2, speedLimit: 40 };
+  const bend = (deg: number, pa: typeof AVENUE, pb: typeof AVENUE) => {
+    const net = new RoadNetwork();
+    const o = net.addNode([0, 0, 0]);
+    net.addSegment(o, net.addNode([-60, 0, 0]), pa);
+    const r = (deg * Math.PI) / 180;
+    net.addSegment(o, net.addNode([-60 * Math.cos(r), 0, 60 * Math.sin(r)]), pb);
+    return buildRoadMesh(net);
+  };
+  /** Area (m²) of plain-asphalt triangles, and how many triangles face down. */
+  const inspect = (mesh: ReturnType<typeof buildRoadMesh>) => {
+    const V = mesh.vertices, I = mesh.indices, S = ROAD_STRIDE;
+    let area = 0, flipped = 0;
+    for (let t = 0; t < I.length; t += 3) {
+      const [a, b, c] = [I[t]!, I[t + 1]!, I[t + 2]!];
+      const cross = (V[b * S + 2]! - V[a * S + 2]!) * (V[c * S]! - V[a * S]!) - (V[b * S]! - V[a * S]!) * (V[c * S + 2]! - V[a * S + 2]!);
+      if (V[a * S + 4]! >= 0.99 && cross < -1e-6) flipped++;
+      if (Math.round(V[a * S + 11]!) === MAT_ASPHALT) area += Math.abs(cross) / 2;
+    }
+    return { area, flipped };
+  };
+
+  it('the outside of a bend is a squared-off kerb with a small rounding, not a big round blob', () => {
+    // Before: 410 m² (90°) and 880 m² (60°) for an avenue turning into a street.
+    expect(inspect(bend(90, AVENUE, STREET)).area).toBeLessThan(250);
+    expect(inspect(bend(60, AVENUE, STREET)).area).toBeLessThan(400);
+    expect(inspect(bend(90, AVENUE, AVENUE)).area).toBeLessThan(400);
+  });
+
+  it('bends of every angle and width face upwards', () => {
+    for (let deg = 30; deg <= 175; deg += 5) {
+      for (const [pa, pb] of [[AVENUE, STREET], [STREET, AVENUE], [AVENUE, AVENUE], [ONEWAY, STREET], [STREET, ONEWAY]] as const) {
+        expect(inspect(bend(deg, pa, pb)).flipped, `${deg}°`).toBe(0);
+      }
+    }
   });
 });

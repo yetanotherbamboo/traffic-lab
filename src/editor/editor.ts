@@ -20,6 +20,8 @@ export const ROAD_PRESETS: RoadPreset[] = [
   { name: 'Avenue', profile: { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 } },
   { name: 'One-way', profile: { forward: 2, backward: 0, laneWidth: 3.25, sidewalk: 2, speedLimit: 40 } },
   { name: 'Boulevard', profile: { forward: 3, backward: 3, laneWidth: 3.5, sidewalk: 3, speedLimit: 60 } },
+  { name: 'Lane', profile: { forward: 1, backward: 0, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 } },
+  { name: 'Alley', profile: { forward: 1, backward: 1, laneWidth: 2.75, sidewalk: 1, speedLimit: 30 } },
 ];
 
 /** What the world must provide to the editor. Snapshots are opaque (network + demolition state). */

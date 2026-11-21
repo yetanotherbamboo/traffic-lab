@@ -20,7 +20,7 @@ The toolbar at the bottom has the tools:
 | Tool | What it does |
 |------|--------------|
 | **Move** | Drag to move the view; pinch or use two fingers to zoom and turn (mouse: drag, right-drag to turn, wheel to zoom). |
-| **Build** | Draw a new road. Pick a road type (street, avenue, one-way, boulevard). Draw by **dragging** from start to end, or switch to **tapping** the start and then the end. Roads that cross make junctions automatically; buildings in the way are demolished (and paid for). A red cross means no road can start there (too close to a junction). |
+| **Build** | Draw a new road. Pick a road type: street, avenue, one-way, boulevard, or the small ones: lane (one lane, one way) and alley (narrow, one lane each way). Draw by **dragging** from start to end, or switch to **tapping** the start and then the end. Roads that cross make junctions automatically; buildings in the way are demolished (and paid for). A red cross means no road can start there (too close to a junction). |
 | **Bend** | Drag the middle of a road to curve it. |
 | **Edit** | Tap a road to change its lanes, direction and speed limit. Tap a junction to change how it is controlled and which lanes may turn where. |
 | **Remove** | Tap a road to remove it. |

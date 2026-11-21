@@ -5,6 +5,8 @@ import { zoneDistance } from '../src/env/zone';
 import { Editor, ROAD_PRESETS } from '../src/editor/editor';
 import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, setLanes, setTurns } from '../src/editor/ops';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
+import { CubicBezier } from '../src/network/bezier';
+import { TOO_SHARP, bendFrom, bendPoint, continueShape, curveShape } from '../src/editor/shape';
 import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
@@ -308,7 +310,7 @@ describe('live editing', () => {
     ed.move([-40, 0, -40], 3);
     ed.move([-25, 0, -40], 3);
     expect(ed.draft?.error).toBeNull();
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     expect(w.net.segments.size).toBe(n0 + 1);
     expect([...w.net.segments.values()].some((s) => s.profile.forward === AVENUE.forward && s.profile.backward === AVENUE.backward && s.curve.length > 24)).toBe(true);
     expect(ed.canUndo).toBe(true);
@@ -401,7 +403,7 @@ describe('starting a road near a junction', () => {
       const err = ed.draft?.error ?? null;
       if (kind === 'blocked') {
         expect(ed.draft?.candidate ?? null, `x=${x}: nothing is previewed`).toBeNull();
-        ed.up();
+        ed.up(); ed.confirm(); ed.cancel();
         expect(ed.message).toBe(TOO_CLOSE);
         expect(w.net.segments.size).toBe(before);
       } else {
@@ -464,7 +466,7 @@ describe('the red cross only allows starts that can lead somewhere', () => {
       ed.preset = preset;
       ed.down(a, 1.5);
       ed.move(b, 1.5);
-      ed.up();
+      ed.up(); ed.confirm(); ed.cancel();
     }
     expect(w.net.node([...w.net.nodes.values()].find((n) => n.pos[0] === 0 && n.pos[2] === 0)!.id).segments.length).toBe(4);
     ed.preset = 1; // avenue
@@ -491,7 +493,7 @@ describe('small roads', () => {
       ed.down([0, 0, 40], 1.5);
       ed.move([40, 0, 40], 1.5);
       if (ed.draft?.error) throw new Error(ed.draft.error);
-      ed.up();
+      ed.up(); ed.confirm(); ed.cancel();
       ed.down([0, 0, 40 + d], 1.5);
       ed.move([40, 0, 40 + d], 1.5);
       const ok = ed.draft !== null && ed.draft.error === null && ed.draft.candidate !== null;
@@ -518,7 +520,7 @@ describe('small roads', () => {
     ed.down([15, 0, 0], 1.5);
     ed.move([15, 0, -40], 1.5);
     expect(ed.draft?.error ?? null).toBeNull();
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     const node = [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - 15, n.pos[2]) < 0.5)!;
     expect(w.net.isEntrance(node.id)).toBe(true);
     // The through road keeps right of way; the entrance has no other control.
@@ -534,7 +536,7 @@ describe('small roads', () => {
     // Further along, a full junction fits: a lane there stays a normal junction.
     ed.down([50, 0, 0], 1.5);
     ed.move([50, 0, -40], 1.5);
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     const far = [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - 50, n.pos[2]) < 0.5)!;
     expect(far.entrance).toBeUndefined();
   });
@@ -554,68 +556,171 @@ describe('starting a road near the construction-zone border', () => {
       ed.down([x, 0, 0], 1.5);
       ed.move([x - 8, 0, 30], 1.5);
       expect(ed.draft?.error ?? null, `x=${x}`).toBeNull();
-      ed.up();
+      ed.up(); ed.confirm(); ed.cancel();
       expect(w.net.segments.size, `x=${x}: built`).toBeGreaterThan(before);
       expect(validate(w.net, small, [...w.net.segments.keys()].filter((id) => segmentEditable(w.net, small, w.net.segment(id))))).toBeNull();
     }
   });
 });
 
-describe('drawing roads by tapping start and end', () => {
-  it('first tap places the start, the second builds; drags are left to the camera', () => {
+describe('the Road tool: pending roads, shapes and chaining', () => {
+  const make = () => {
     const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
     const ed = new Editor(w);
     ed.setTool('road');
-    expect(ed.dragTool).toBe(true);
-    ed.setRoadMode('tap');
-    expect(ed.dragTool).toBe(false);
-    const before = w.net.segments.size, spentBefore = w.spent;
+    return { w, ed };
+  };
+  /** A tap as the camera controller delivers it: the editor's `down`/`up` if it takes the gesture, else `tap`. */
+  const tapAt = (ed: Editor, p: Vec3, tol = 1.5): void => {
+    if (ed.down(p, tol)) ed.up();
+    else ed.tap(p, tol);
+  };
+  const drag = (ed: Editor, a: Vec3, b: Vec3, tol = 1.5): boolean => {
+    if (!ed.down(a, tol)) return false;
+    ed.move(b, tol);
+    ed.up();
+    return true;
+  };
+  const last = (w: World) => [...w.net.segments.values()].at(-1)!;
 
-    ed.tap([30, 0, 30], 1.5);
-    expect(ed.pendingStart).toBe(true);
+  it('a drag makes a pending road that is only built by ✓; ✕ drops it', () => {
+    const { w, ed } = make();
+    const before = w.net.segments.size, spent = w.spent;
+    drag(ed, [30, 0, 30], [30, 0, 55]);
+    expect(ed.pending).toBe(true);
+    expect(ed.canConfirm).toBe(true);
     expect(w.net.segments.size).toBe(before);
-    // Mouse: the road follows the pointer from the start.
-    ed.hoverAt([30, 0, 50], 1.5);
-    expect(ed.draft?.candidate).toBeTruthy();
-    // An end outside the zone: refused, but the start stays for another try.
-    ed.tap([30, 0, 200], 1.5);
-    expect(ed.message).toBe('You can only build inside the construction zone');
-    expect(ed.pendingStart).toBe(true);
+    expect(ed.draft!.length).toBeCloseTo(25, 0);
+    ed.cancel();
+    expect(ed.pending).toBe(false);
     expect(w.net.segments.size).toBe(before);
-    // A good end builds the road and clears the start.
-    ed.tap([30, 0, 55], 1.5);
-    expect(ed.pendingStart).toBe(false);
-    expect(ed.draft).toBeNull();
+    expect(w.spent).toBe(spent);
+
+    // ✕ also clears a hint left from tapping beside the pending road.
+    drag(ed, [30, 0, 30], [30, 0, 55]);
+    tapAt(ed, [60, 0, 60]);
+    expect(ed.message).not.toBeNull();
+    ed.discard();
+    expect(ed.message).toBeNull();
+    expect(ed.pending).toBe(false);
+
+    drag(ed, [30, 0, 30], [30, 0, 55]);
+    expect(ed.confirm()).toBeNull();
     expect(w.net.segments.size).toBe(before + 1);
-    expect(w.spent).toBeGreaterThan(spentBefore);
-    const built = [...w.net.segments.values()].at(-1)!;
-    const ends = [w.net.node(built.a).pos, w.net.node(built.b).pos].map((p) => [p[0], p[2]]);
-    expect(ends).toContainEqual([30, 30]);
-    expect(ends).toContainEqual([30, 55]);
-    // One undo removes it.
+    expect(w.spent).toBeGreaterThan(spent);
     ed.undo();
     expect(w.net.segments.size).toBe(before);
   });
 
-  it('tapping the start again cancels; no start where a road cannot begin', () => {
-    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
-    const ed = new Editor(w);
-    ed.setTool('road');
-    ed.setRoadMode('tap');
-    ed.tap([30, 0, 30], 1.5);
+  it('tap the start, tap the end; one-finger drags elsewhere are left to the camera', () => {
+    const { w, ed } = make();
+    const before = w.net.segments.size;
+    tapAt(ed, [30, 0, 30]);
     expect(ed.pendingStart).toBe(true);
-    ed.tap([30.5, 0, 30], 1.5);
+    expect(ed.down([60, 0, 60], 1.5)).toBe(false); // away from the start: the view moves
+    // Mouse: the road follows the pointer from the start, but nothing is placed.
+    ed.hoverAt([30, 0, 50], 1.5);
+    expect(ed.draft?.candidate).toBeTruthy();
+    expect(ed.pendingStart).toBe(true);
+    // An end outside the zone: shown red, can't be built.
+    tapAt(ed, [30, 0, 200]);
+    expect(ed.pending).toBe(true);
+    expect(ed.draft!.error).toBe('You can only build inside the construction zone');
+    expect(ed.canConfirm).toBe(false);
+    expect(ed.confirm()).not.toBeNull();
+    expect(w.net.segments.size).toBe(before);
+    // Drag its end back inside, then build.
+    expect(ed.down([30, 0, 200], 1.5)).toBe(true);
+    ed.move([30, 0, 55], 1.5);
+    ed.up();
+    expect(ed.canConfirm).toBe(true);
+    ed.confirm();
+    expect(w.net.segments.size).toBe(before + 1);
+    const built = last(w);
+    const ends = [w.net.node(built.a).pos, w.net.node(built.b).pos].map((p) => [p[0], p[2]]);
+    expect(ends).toContainEqual([30, 30]);
+    expect(ends).toContainEqual([30, 55]);
+  });
+
+  it('tapping the start again stops; no start where a road cannot begin', () => {
+    const { ed } = make();
+    tapAt(ed, [30, 0, 30]);
+    expect(ed.pendingStart).toBe(true);
+    tapAt(ed, [30.5, 0, 30]);
     expect(ed.pendingStart).toBe(false);
     expect(ed.draft).toBeNull();
     // Too close to the centre junction on the avenue (see the red-cross test).
-    ed.tap([17, 0, 0], 1.5);
+    tapAt(ed, [17, 0, 0]);
     expect(ed.pendingStart).toBe(false);
     expect(ed.message).toBe(TOO_CLOSE);
-    // Switching tools or modes drops a placed start.
-    ed.tap([30, 0, 30], 1.5);
-    ed.setRoadMode('drag');
+    // Switching tools drops a placed start.
+    tapAt(ed, [30, 0, 30]);
+    ed.setTool('select');
     expect(ed.pendingStart).toBe(false);
     expect(ed.draft).toBeNull();
+  });
+
+  it('dragging a pending road\'s grips moves its ends', () => {
+    const { w, ed } = make();
+    drag(ed, [30, 0, 30], [30, 0, 55]);
+    drag(ed, [30, 0, 30], [30, 0, 22]); // start grip (moved ends snap like new ones)
+    drag(ed, [30, 0, 55], [30, 0, 64]); // end grip
+    ed.confirm();
+    const s = last(w);
+    const ends = [w.net.node(s.a).pos, w.net.node(s.b).pos].map((p) => [Math.round(p[0] * 100) / 100, Math.round(p[2] * 100) / 100]);
+    expect(ends).toContainEqual([30, 22]);
+    expect(ends).toContainEqual([30, 64]);
+  });
+
+  it('chaining: after ✓ the end starts the next road', () => {
+    const { w, ed } = make();
+    const before = w.net.segments.size;
+    tapAt(ed, [30, 0, 30]);
+    tapAt(ed, [30, 0, 55]);
+    ed.confirm();
+    expect(ed.pendingStart).toBe(true);
+    tapAt(ed, [55, 0, 55]);
+    ed.confirm();
+    expect(w.net.segments.size).toBe(before + 2);
+    const joint = [...w.net.nodes.values()].find((n) => n.pos[0] === 30 && n.pos[2] === 55)!;
+    expect(joint.segments.length).toBe(2);
+    ed.cancel();
+    expect(ed.pendingStart).toBe(false);
+  });
+
+  it('Curve mode: the middle grip bows the road; switching shape reshapes a pending road', () => {
+    const { w, ed } = make();
+    drag(ed, [30, 0, 30], [30, 0, 60]);
+    ed.setDrawMode('curve');
+    expect(ed.draft!.grips.length).toBe(3);
+    drag(ed, [30, 0, 45], [36, 0, 45]); // the middle grip, 6 m to the side
+    ed.confirm();
+    const s = last(w);
+    const mid = s.curve.point(0.5);
+    expect(mid[0]).toBeCloseTo(36, 1);
+    expect(mid[2]).toBeCloseTo(45, 1);
+    expect(s.curve.length).toBeGreaterThan(30);
+  });
+
+  it('Continuous mode: the road leaves along the road it continues', () => {
+    const { w, ed } = make();
+    ed.setDrawMode('continuous');
+    drag(ed, [30, 0, 30], [30, 0, 55]); // nothing to continue: straight
+    expect(ed.confirm()).toBeNull();
+    // Chained: carries on south, then bends towards the east.
+    tapAt(ed, [45, 0, 75]);
+    expect(ed.draft!.error).toBeNull();
+    ed.confirm();
+    const s = last(w);
+    const startsAtJoint = w.net.node(s.a).pos[2] === 55;
+    const d = s.curve.derivative(startsAtJoint ? 0 : 1);
+    const l = Math.hypot(d[0], d[2]);
+    // Tangent at the joint points straight on (+z), so the roads meet without a kink.
+    expect(Math.abs(d[0] / l)).toBeLessThan(0.01);
+    expect(w.net.isJunction(startsAtJoint ? s.a : s.b)).toBe(false);
+    // Too far round to the side: refused with a reason.
+    tapAt(ed, [20, 0, 76]);
+    expect(ed.draft!.error).toBe(TOO_SHARP);
   });
 });
 
@@ -626,7 +731,7 @@ describe('saving and resetting the city', () => {
     ed.setTool('road');
     ed.down([30, 0, 30], 1.5);
     ed.move([30, 0, 55], 1.5);
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     const centre = [...w.net.nodes.values()].find((n) => n.pos[0] === 0 && n.pos[2] === 0)!;
     expect(ed.apply((n) => { n.node(centre.id).control = 'signal'; n.node(centre.id).greens = { [n.node(centre.id).segments[0]!]: 35 }; })).toBeNull();
     expect(w.spent).toBeGreaterThan(0);
@@ -650,7 +755,7 @@ describe('saving and resetting the city', () => {
     ed.setTool('road');
     ed.down([30, 0, 30], 1.5);
     ed.move([30, 0, 55], 1.5);
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     expect(ed.canUndo).toBe(true);
 
     w.regenerate(buildTestNetwork(), TEST_SEED + 1);
@@ -666,5 +771,37 @@ describe('saving and resetting the city', () => {
     expect(w.sim.stats.vehicles).toBeGreaterThan(0);
     // A save of the new city only fits a world grown from the same seed.
     expect(() => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners).restore(w.snapshot())).toThrow();
+  });
+});
+
+describe('road shapes', () => {
+  it('continueShape: a circular arc leaving along the start direction', () => {
+    const A: Vec3 = [0, 0, 0];
+    for (const B of [[30, 0, 10], [20, 0, 25], [40, 0, -5]] as Vec3[]) {
+      const s = continueShape(A, B, [1, 0, 0]);
+      if (typeof s === 'string') throw new Error(s);
+      const c = new CubicBezier(A, s.c1, s.c2, B);
+      const d0 = c.derivative(0);
+      expect(Math.abs(d0[2])).toBeLessThan(1e-9); // leaves along +x
+      expect(d0[0]).toBeGreaterThan(0);
+      // Every point lies on one circle through A, tangent to +x there: centre (0, R).
+      const R = (B[0] ** 2 + B[2] ** 2) / (2 * B[2]);
+      for (let t = 0; t <= 1; t += 0.05) {
+        const p = c.point(t);
+        expect(Math.abs(Math.hypot(p[0], p[2] - R) - Math.abs(R)) / Math.abs(R)).toBeLessThan(0.003);
+      }
+    }
+    expect(continueShape(A, [5, 0, 30], [1, 0, 0])).toBe(TOO_SHARP);
+    expect(continueShape(A, [-10, 0, 1], [1, 0, 0])).toBe(TOO_SHARP);
+  });
+
+  it('curveShape passes through its bend point; bendFrom inverts bendPoint', () => {
+    const A: Vec3 = [0, 0, 0], B: Vec3 = [40, 0, 0];
+    const s = curveShape(A, B, 8);
+    const mid = new CubicBezier(A, s.c1, s.c2, B).point(0.5);
+    const H = bendPoint(A, B, 8);
+    expect(Math.hypot(mid[0] - H[0], mid[2] - H[2])).toBeLessThan(1e-9);
+    expect(H[2]).toBeCloseTo(8, 9); // right of +x is +z
+    expect(bendFrom(A, B, H)).toBeCloseTo(8, 9);
   });
 });

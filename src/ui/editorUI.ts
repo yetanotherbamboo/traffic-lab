@@ -1,5 +1,6 @@
 import { formatMoney } from '../editor/cost';
 import { type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
+import type { DrawMode } from '../editor/shape';
 import { MAX_LANES, setControl, setEntrance, setFreeFlow, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
 import {
   RING_MAX_LANES, RING_MIN_LANES, convertToRoundabout, outerRadius, removeRoundabout, setRoundaboutLanes, setRoundaboutSize,
@@ -23,7 +24,7 @@ const TOOLS: [Tool, string][] = [['view', 'Move'], ['road', 'Build'], ['bend', '
 
 const HINTS: Record<Tool, string> = {
   view: 'Drag to move · pinch or two fingers to zoom and turn',
-  road: 'Drag from a point to another to build a road · two fingers move the view',
+  road: 'Drag from one point to another, or tap the start and then the end · two fingers move the view',
   bend: 'Drag the middle of a road to bend it',
   select: 'Tap a road, junction or roundabout to change it',
   delete: 'Tap a road to remove it',
@@ -36,6 +37,8 @@ const TURN_CYCLE = [0, TURN_LEFT, TURN_STRAIGHT, TURN_RIGHT, TURN_LEFT | TURN_ST
 export function turnGlyphs(mask: number): string {
   return (mask & TURN_LEFT ? '←' : '') + (mask & TURN_STRAIGHT ? '↑' : '') + (mask & TURN_RIGHT ? '→' : '') || '·';
 }
+
+const SHAPES: [DrawMode, string][] = [['straight', 'Straight'], ['curve', 'Curve'], ['continuous', 'Continuous']];
 
 const CONTROLS: [JunctionControl, string][] = [['priority', 'Priority'], ['allway', 'All-way stop'], ['signal', 'Signals']];
 
@@ -95,7 +98,10 @@ export class EditorUI {
         if (e.shiftKey) editor.redo();
         else editor.undo();
       } else if (e.key === 'Escape') {
-        editor.cancel();
+        editor.discard();
+      } else if (e.key === 'Enter' && editor.pending) {
+        e.preventDefault();
+        editor.confirm();
       }
     });
   }
@@ -111,7 +117,7 @@ export class EditorUI {
     this.redoBtn.disabled = !ed.canRedo;
     this.renderInfo();
     const sel = ed.selection;
-    const key = `${ed.tool}|${ed.preset}|${ed.roadMode}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
+    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
     if (key !== this.panelKey) {
       this.panelKey = key;
       this.renderPanel();
@@ -121,31 +127,43 @@ export class EditorUI {
   private renderInfo(): void {
     const ed = this.editor, d = ed.draft;
     const out: Child[] = [];
-    if (d?.candidate && (ed.tool === 'road' || ed.tool === 'bend')) {
+    const stop = (): HTMLElement => chip('✕', false, () => ed.discard(), 'icon');
+    if (ed.tool === 'road' && ed.pending && d) {
+      // A pending road: what it costs (or why it can't be built), with ✕ and ✓ either side.
+      out.push(stop(), ' ');
       if (d.error) {
         out.push(h('span', { class: 'err' }, d.error));
       } else {
-        const len = d.touched.length > 0 && ed.tool === 'road'
-          ? Math.hypot(d.markers[1]!.pos[0] - d.markers[0]!.pos[0], d.markers[1]!.pos[2] - d.markers[0]!.pos[2])
-          : 0;
-        if (len > 0) out.push(h('b', {}, `${len.toFixed(0)} m`), ' · ');
-        out.push(h('b', {}, formatMoney(d.cost)));
-        if (d.demolish.length > 0) {
-          const n = d.demolish.length;
-          out.push(' · demolishes ', h('b', {}, `${n} ${n === 1 ? 'item' : 'items'}`), ` (${formatMoney(d.demolishCost)})`);
-        }
+        out.push(...this.costLine(d));
       }
+      const ok = chip('✓ Build', false, () => ed.confirm(), 'go') as HTMLButtonElement;
+      ok.disabled = !ed.canConfirm;
+      out.push(' ', ok);
+    } else if (d?.candidate && ed.tool === 'bend') {
+      out.push(...(d.error ? [h('span', { class: 'err' }, d.error)] : this.costLine(d)));
+    } else if (ed.tool === 'road' && ed.pendingStart) {
+      out.push(stop(), ' ', ed.message ? h('span', { class: 'err' }, ed.message)
+        : ed.noContinuation ? 'Nothing to continue here: this road will be straight · tap or drag to its end'
+        : 'Tap where the road ends, or drag from its start');
     } else if (ed.message) {
       out.push(h('span', { class: 'err' }, ed.message));
-    } else if (ed.tool === 'road' && ed.roadMode === 'tap') {
-      out.push(ed.pendingStart
-        ? 'Tap where the road should end · tap the start again to cancel'
-        : 'Tap where the road should start · drag to move the view');
     } else {
       out.push(HINTS[ed.tool]);
     }
     this.info.replaceChildren(...out.filter((c): c is Node | string => !!c));
     this.info.hidden = false;
+  }
+
+  /** "42 m · 120 k€ · demolishes 3 items (45 k€)" */
+  private costLine(d: NonNullable<Editor['draft']>): Child[] {
+    const out: Child[] = [];
+    if (d.length > 0) out.push(h('b', {}, `${d.length.toFixed(0)} m`), ' · ');
+    out.push(h('b', {}, formatMoney(d.cost)));
+    if (d.demolish.length > 0) {
+      const n = d.demolish.length;
+      out.push(' · demolishes ', h('b', {}, `${n} ${n === 1 ? 'item' : 'items'}`), ` (${formatMoney(d.demolishCost)})`);
+    }
+    return out;
   }
 
   private renderPanel(): void {
@@ -154,13 +172,10 @@ export class EditorUI {
     if (ed.tool === 'road') {
       body.push(h('div', { class: 'row' }, ...ROAD_PRESETS.map((p, i) =>
         chip(`${p.name} ${p.profile.forward}${p.profile.backward ? `+${p.profile.backward}` : ''}`, ed.preset === i, () => {
-          ed.preset = i;
-          this.panelKey = '';
-          this.seen = -1;
+          ed.setPreset(i);
         }))));
-      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Draw by'),
-        chip('Dragging', ed.roadMode === 'drag', () => ed.setRoadMode('drag')),
-        chip('Tapping start and end', ed.roadMode === 'tap', () => ed.setRoadMode('tap'))));
+      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Shape'),
+        ...SHAPES.map(([m, label]) => chip(label, ed.drawMode === m, () => ed.setDrawMode(m)))));
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {

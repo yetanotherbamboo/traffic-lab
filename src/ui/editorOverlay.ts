@@ -37,6 +37,8 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
       }
     }
     for (const m of d.markers) marker(ob, m, d.error && m.kind === 'free' ? color : MARKER_COLOR[m.kind]);
+    // Grips of a pending road: a filled dot inside each circle says "drag me".
+    for (const g of d.grips) ob.dot(g, 1.3, OVERLAY.segment);
     for (const id of d.demolish) {
       const it = w.city.items[id]!;
       if (it.lot) ob.lot(it.lot, OVERLAY.demolish);

@@ -234,13 +234,18 @@ _Last updated: 2026-11-21_
     - **Sampling:** lanes and road meshes take at least one sample per 6° of turning as well as every 2 m (`CubicBezier.pieces`).
     - **Corner sidewalks:** stations on a kerb fillet use the circle's exact tangent (the sidewalk lies on the inside of the fillet, so averaged directions folded it where a few cm of straight kerb meets the arc; this showed up once the curved ring corners got slightly uneven trims).
     - **Tests:** cornering profile; cars slow before 25 m and 40 m bends and stay within cornering speed (+8%); gentle bends don't slow cars; curved arm clearance (fails without the fix); straight junction trims unchanged. Mesh and lane-graph build about 0.2 ms slower on the test city.
+  - **Road tool redesign (2026-11-21)** (Cities: Skylines style, adapted to touch):
+    - **Pending road:** a drag from start to end, or a tap on each, shows the road (real mesh, cost, demolition) without building it. Its circles (grips) can be dragged; ✓ Build in the info line builds it (greyed out with the reason in red when it can't be), ✕ / Escape drops it (`Editor.discard`), Enter builds. One-finger drags away from the grips move the view; with nothing placed yet a drag draws. Replaces the drag/tap "Draw by" switch.
+    - **Chaining:** after ✓ the end node starts the next road; tapping that start again or ✕ stops.
+    - **Shapes** (`src/editor/shape.ts`, Road panel "Shape"): Straight; Curve (a middle grip bows the road through that point, the Bend tool's quadratic); Continuous (circular arc leaving along the road it continues: a chained road's end direction, or the only road at a dead end; up to 75° off that direction, else "Too sharp a turn…"; elsewhere straight with a hint). Switching shape or road type reshapes a pending road.
+    - `addRoad` takes optional control points. Draft gained `length` (curve length shown in the info) and `grips` (drawn as dots inside the rings).
+    - **Checks:** editor tests for ✓/✕, tap-tap, grips, chaining, Curve, Continuous (tangent at the joint, no junction there) and the shape maths (arc within 0.3% of a circle). Headless Chrome at phone size (390×844) drove real mouse gestures: drag → pending → ✓ → chained tap → ✓ → ✕ → Curve with the middle grip dragged 8 m (built road's midpoint exactly there), no console errors. It also found ✕ leaving a stale hint (fixed: `discard` clears messages).
 
 ### Next
-- [ ] **Road tool redesign** (from the Cities: Skylines study):
-  - one Build tool with modes Straight · Curve (start → control point → end) · Continuous (leaves tangent to the road it starts from, curvature matched);
-  - a pending road with draggable handles and ✓ / ✕ instead of building on release (replaces the drag/tap switch);
-  - chaining: the end of a built road starts the next one;
+- [ ] **Road tool, part 2:**
   - guidance: length and angle labels above the finger, guide lines from nearby roads, a snapping toggle, the advisory speed of tight bends ("cars slow to 25 km/h").
+  - grips and the preview line hide behind buildings (the overlay is depth-tested): draw grips on top;
+  - Continuous: match the curvature where the new arc meets the previous road (only the direction matches now, so cars may still dip in speed at the join).
   - Later: an Upgrade tool (change a road's type in place), node dragging, drag-to-remove, parallel roads.
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**
 

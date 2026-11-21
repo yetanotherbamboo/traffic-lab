@@ -3,6 +3,7 @@ import { type JunctionControl, type LaneProfile, type RoadNetwork, horizontal, r
 import { roadCost } from './cost';
 import { nearestOnSegment } from './pick';
 import { sampleCurve } from './rules';
+import type { Shape } from './shape';
 import type { Anchor } from './snap';
 import { MAX_ARMS, MIN_ANGLE, tooShort } from './validate';
 
@@ -169,12 +170,12 @@ export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile)
 }
 
 /** Builds a straight road between two anchors, adding junctions where it crosses other roads. */
-export function addRoad(net: RoadNetwork, start: Anchor, end: Anchor, profile: LaneProfile): EditResult {
+export function addRoad(net: RoadNetwork, start: Anchor, end: Anchor, profile: LaneProfile, shape?: Shape): EditResult {
   const a = resolve(net, start);
   const b = resolve(net, end);
   if (a === b) throw new EditError('Road is too short');
   if (net.node(a).segments.some((s) => net.otherEnd(net.segment(s), a) === b)) throw new EditError('These points are already connected');
-  const id = net.addSegment(a, b, profile);
+  const id = net.addSegment(a, b, profile, shape?.c1, shape?.c2);
   const cost = roadCost(net.segment(id));
   const changed = splitCrossings(net, [id]);
   preferEntrance(net, a);

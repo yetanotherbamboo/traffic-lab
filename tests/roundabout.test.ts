@@ -280,7 +280,7 @@ describe('roundabouts in the live game', () => {
     ed.down([Math.cos(a) * R, 0, Math.sin(a) * R], 2);
     ed.move([Math.cos(a) * 64, 0, Math.sin(a) * 64], 2);
     expect(ed.draft?.error ?? null).toBeNull();
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     const entries = ringParts(w.net, id).nodes.filter((n) => w.net.node(n).segments.length === 3);
     expect(entries.length).toBe(4);
     expect(validate(w.net, TEST_ZONE, allSegs(w.net).filter((s) => w.net.segment(s).ring === id))).toBeNull();
@@ -303,7 +303,7 @@ describe('roundabouts in the live game', () => {
     const onRing: Vec3 = [-(r.radius + 2), 0, -6];
     ed.setTool('bend');
     ed.down(onRing, 2);
-    ed.up();
+    ed.up(); ed.confirm(); ed.cancel();
     expect(ed.message).toMatch(/round shape/);
     ed.setTool('delete');
     ed.tap(onRing, 2);

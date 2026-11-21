@@ -5,6 +5,7 @@ import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoa
 import { type Pick, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
+import { type DrawMode, type Shape, bendFrom, bendPoint, continueShape, curveShape, endDirection, straightShape } from './shape';
 import { type Anchor, snapPoint } from './snap';
 import { validate } from './validate';
 
@@ -53,6 +54,15 @@ export interface Draft {
   cost: number;
   demolish: number[];
   demolishCost: number;
+  /** Length of the new road (m), 0 when there is none. */
+  length: number;
+  /** Points the player can drag (the pending road's ends and bend handle). */
+  grips: Vec3[];
+}
+
+/** A draft that only shows markers (no road yet). */
+function markerDraft(markers: Marker[], error: string | null): Draft {
+  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [] };
 }
 
 const HISTORY_LIMIT = 100;
@@ -67,17 +77,28 @@ const JOINT_SNAP = 20;
 export class Editor {
   tool: Tool = 'view';
   preset = 0;
-  /**
-   * How the Road tool draws: 'drag' from start to end in one gesture, or 'tap' the start and then
-   * the end (one-finger drags move the view in between).
-   */
-  roadMode: 'drag' | 'tap' = 'drag';
+  /** How the Road tool shapes new roads. */
+  drawMode: DrawMode = 'straight';
   selection: Pick = null;
   draft: Draft | null = null;
   hover: Marker | null = null;
   /** Last message for the player (errors after a tap, hints). */
   message: string | null = null;
+  /**
+   * Road tool. A road in progress has a start, then an end: with both it is *pending* (shown,
+   * adjustable by dragging its grips, built by `confirm`). After building, its end starts the
+   * next road (chaining).
+   */
   private start: Anchor | null = null;
+  private end: Anchor | null = null;
+  /** Curve mode: how far (m) the road's middle bows out to the right of its chord. */
+  private bend = 0;
+  /** What the current drag moves: a new road's end, one of the pending road's grips, or nothing. */
+  private grab: 'new' | 'start' | 'end' | 'bend' | null = null;
+  /** True when this drag's start was placed before the gesture (tapping it again stops drawing). */
+  private grabbedOld = false;
+  /** Direction a chained start continues (the built road's direction at its end). */
+  private chainDir: Vec3 | null = null;
   private bendSeg = -1;
   private readonly past: unknown[] = [];
   private readonly future: unknown[] = [];
@@ -99,22 +120,139 @@ export class Editor {
     this.changed();
   }
 
-  /** Drag tools take over single-finger drags; the other tools leave them to the camera. */
+  /** Drag tools may take single-finger drags (`down` decides); the other tools leave them to the camera. */
   get dragTool(): boolean {
-    return (this.tool === 'road' && this.roadMode === 'drag') || this.tool === 'bend';
+    return this.tool === 'road' || this.tool === 'bend';
   }
 
-  setRoadMode(m: 'drag' | 'tap'): void {
-    this.cancel();
-    this.roadMode = m;
-    this.hover = null;
+  /** Picks the road type; a pending road changes with it. */
+  setPreset(i: number): void {
+    this.preset = i;
     this.message = null;
+    this.refresh();
+  }
+
+  /** Changes how roads are shaped; a pending road is reshaped in place. */
+  setDrawMode(m: DrawMode): void {
+    this.drawMode = m;
+    this.bend = 0;
+    this.message = null;
+    this.refresh();
+  }
+
+  /** A start is placed and the road's end is still to come. */
+  get pendingStart(): boolean {
+    return this.tool === 'road' && this.start !== null && this.end === null;
+  }
+
+  /** A whole road is shown, waiting for `confirm` (✓) or `cancel` (✕). */
+  get pending(): boolean {
+    return this.tool === 'road' && this.start !== null && this.end !== null;
+  }
+
+  /** The pending road can be built as it is. */
+  get canConfirm(): boolean {
+    const d = this.draft;
+    return this.pending && this.grab === null && !!d?.candidate && !d.error && d.touched.length > 0;
+  }
+
+  /** Continuous mode: the direction the road in progress leaves its start, or null (then it's straight). */
+  private startDir(): Vec3 | null {
+    const a = this.start;
+    if (!a || a.kind !== 'node' || !this.net.nodes.has(a.id)) return null;
+    if (this.chainDir) return this.chainDir;
+    const arms = this.net.arms(a.id);
+    if (arms.length !== 1) return null;
+    const d = arms[0]!.dir; // points away from the node, back along the road
+    return [-d[0], 0, -d[2]];
+  }
+
+  /** Continuous mode has nothing to continue from this start. */
+  get noContinuation(): boolean {
+    return this.drawMode === 'continuous' && this.start !== null && this.startDir() === null;
+  }
+
+  /** The shape of the road in progress, or an error message. */
+  private shape(): Shape | string {
+    const A = this.start!.pos, B = this.end!.pos;
+    if (this.drawMode === 'curve') return curveShape(A, B, this.bend);
+    if (this.drawMode === 'continuous') {
+      const d = this.startDir();
+      if (d) return continueShape(A, B, d);
+    }
+    return straightShape(A, B);
+  }
+
+  /** Rebuilds the preview of the road in progress. */
+  private refresh(): void {
+    const a = this.start, b = this.end;
+    if (this.tool !== 'road' || !a) {
+      this.changed();
+      return;
+    }
+    if (!b) {
+      this.draft = markerDraft([{ pos: a.pos, kind: a.kind }], null);
+      this.draft.grips = [a.pos];
+      this.changed();
+      return;
+    }
+    const markers: Marker[] = [{ pos: a.pos, kind: a.kind }, { pos: b.pos, kind: b.kind }];
+    const grips: Vec3[] = [a.pos, b.pos];
+    if (this.drawMode === 'curve') {
+      const h = bendPoint(a.pos, b.pos, this.bend);
+      markers.push({ pos: h, kind: 'handle' });
+      grips.push(h);
+    }
+    const shape = this.shape();
+    const err = this.outside(a) ?? this.outside(b) ?? this.startProblem(a) ?? (typeof shape === 'string' ? shape : null);
+    const profile = ROAD_PRESETS[this.preset]!.profile;
+    const op = (net: RoadNetwork): EditResult => addRoad(net, a, b, profile, typeof shape === 'string' ? straightShape(a.pos, b.pos) : shape);
+    this.draft = this.preview(op, markers, err);
+    this.draft.grips = grips;
+    if (this.draft.candidate && typeof shape !== 'string') {
+      let len = 0;
+      for (const id of this.draft.changed) len += this.draft.candidate.segments.get(id)?.curve.length ?? 0;
+      this.draft.length = len;
+    }
     this.changed();
   }
 
-  /** Tap mode: a start point is placed and the next tap ends the road. */
-  get pendingStart(): boolean {
-    return this.tool === 'road' && this.roadMode === 'tap' && this.start !== null;
+  /**
+   * Builds the pending road (✓). Its end becomes the start of the next road. Returns the error
+   * message if it can't be built.
+   */
+  confirm(): string | null {
+    if (!this.pending) return null;
+    const d = this.draft;
+    if (!this.canConfirm || !d?.candidate) {
+      this.message = d?.error ?? 'This road can\'t be built';
+      this.changed();
+      return this.message;
+    }
+    const shape = this.shape();
+    const A = this.start!.pos, B = this.end!.pos;
+    const dir = typeof shape === 'string' ? null : endDirection(A, B, shape);
+    this.commit(d.candidate, d.demolish, d.cost + d.demolishCost);
+    // Chain: carry on from the node now at the end.
+    const net = this.net;
+    let next: Anchor | null = null;
+    for (const n of net.nodes.values()) {
+      if (Math.hypot(n.pos[0] - B[0], n.pos[2] - B[2]) < 0.01 && nodeConnectable(net, this.host.zone, n.id)) next = { kind: 'node', id: n.id, pos: n.pos };
+    }
+    this.end = null;
+    this.bend = 0;
+    this.grab = null;
+    if (next && this.startProblem(next) === null) {
+      this.start = next;
+      this.chainDir = dir;
+      this.message = null;
+    } else {
+      this.start = null;
+      this.chainDir = null;
+      this.draft = null;
+    }
+    this.refresh();
+    return null;
   }
 
   private get net(): RoadNetwork {
@@ -128,27 +266,7 @@ export class Editor {
   /** Finger/mouse down with a drag tool. Returns true if the editor takes the gesture. */
   down(p: Vec3, tol: number): boolean {
     this.message = null;
-    if (this.tool === 'road') {
-      const snap = { anchor: this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor) };
-      const problem = this.startProblem(snap.anchor);
-      if (problem) {
-        // Nothing gets built from here: keep the red cross under the finger until it lifts.
-        this.start = null;
-        this.draft = {
-          candidate: null, changed: [], touched: [], markers: [{ pos: snap.anchor.pos, kind: 'blocked' }],
-          error: problem, cost: 0, demolish: [], demolishCost: 0,
-        };
-        this.changed();
-        return true;
-      }
-      this.start = snap.anchor;
-      this.draft = {
-        candidate: null, changed: [], touched: [], markers: [{ pos: snap.anchor.pos, kind: snap.anchor.kind }],
-        error: this.outside(snap.anchor), cost: 0, demolish: [], demolishCost: 0,
-      };
-      this.changed();
-      return true;
-    }
+    if (this.tool === 'road') return this.downRoad(p, tol);
     if (this.tool === 'bend') {
       const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
       if (pick?.kind !== 'segment' || this.net.segment(pick.id).ring !== undefined) {
@@ -165,14 +283,61 @@ export class Editor {
     return false;
   }
 
-  move(p: Vec3, tol: number): void {
-    if (this.tool === 'road' && this.start) {
-      const end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start).anchor);
-      const markers: Marker[] = [{ pos: this.start.pos, kind: this.start.kind }, { pos: end.pos, kind: end.kind }];
-      const err = this.outside(this.start) ?? this.outside(end);
-      const preset = ROAD_PRESETS[this.preset]!;
-      this.draft = this.preview((net) => addRoad(net, this.start!, end, preset.profile), markers, err);
+  /**
+   * Road tool: on a pending road, grab the nearest grip (else leave the drag to the camera);
+   * with only a start, a drag from it pulls out the end; with nothing yet, place the start here.
+   */
+  private downRoad(p: Vec3, tol: number): boolean {
+    const near = (q: Vec3): number => Math.hypot(q[0] - p[0], q[2] - p[2]);
+    if (this.start && this.end) {
+      const grips: ['start' | 'end' | 'bend', Vec3][] = [['start', this.start.pos], ['end', this.end.pos]];
+      if (this.drawMode === 'curve') grips.unshift(['bend', bendPoint(this.start.pos, this.end.pos, this.bend)]);
+      let best: (typeof grips)[number] | null = null;
+      for (const g of grips) if (near(g[1]) < tol * 1.2 && (!best || near(g[1]) < near(best[1]))) best = g;
+      if (!best) return false;
+      this.grab = best[0];
+      this.grabbedOld = true;
+      this.refresh();
+      return true;
+    }
+    if (this.start) {
+      if (near(this.start.pos) > tol * 1.2) return false;
+      this.grab = 'new';
+      this.grabbedOld = true;
+      return true;
+    }
+    const a = this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor);
+    const problem = this.outside(a) ?? this.startProblem(a);
+    if (problem) {
+      // Nothing gets built from here: keep the red cross under the finger until it lifts.
+      this.draft = markerDraft([{ pos: a.pos, kind: 'blocked' }], problem);
       this.changed();
+      return true;
+    }
+    this.start = a;
+    this.chainDir = null;
+    this.grab = 'new';
+    this.grabbedOld = false;
+    this.hover = null;
+    this.refresh();
+    return true;
+  }
+
+  move(p: Vec3, tol: number): void {
+    if (this.tool === 'road' && this.start && this.grab) {
+      if (this.grab === 'new' || this.grab === 'end') {
+        const end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start).anchor);
+        // Too close to the start to be a road: keep only the start.
+        this.end = Math.hypot(end.pos[0] - this.start.pos[0], end.pos[2] - this.start.pos[2]) < 1 ? null : end;
+      } else if (this.grab === 'start' && this.end) {
+        const keep = { start: this.start.pos, end: this.end.pos };
+        this.start = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.end).anchor);
+        this.chainDir = null; // no longer where the previous road ended
+        if (Math.hypot(keep.end[0] - this.start.pos[0], keep.end[2] - this.start.pos[2]) < 1) this.start = { kind: 'free', pos: keep.start };
+      } else if (this.grab === 'bend' && this.end) {
+        this.bend = bendFrom(this.start.pos, this.end.pos, [p[0], 0, p[2]]);
+      }
+      this.refresh();
     } else if (this.tool === 'bend' && this.bendSeg >= 0) {
       this.draft = this.preview((net) => bendRoad(net, this.bendSeg, p), [{ pos: [p[0], 0, p[2]], kind: 'handle' }], null);
       this.changed();
@@ -180,28 +345,55 @@ export class Editor {
   }
 
   up(): void {
+    if (this.tool === 'road') {
+      const grab = this.grab;
+      this.grab = null;
+      if (!this.start) {
+        // Lifted from a red cross.
+        this.message = this.draft?.error ?? null;
+        this.draft = null;
+      } else if (grab === 'new' && !this.end && this.grabbedOld) {
+        this.cancel(); // tapped the start again: stop drawing
+        return;
+      }
+      this.refresh();
+      return;
+    }
     const d = this.draft;
     if (d?.candidate && !d.error && d.touched.length > 0) {
       this.commit(d.candidate, d.demolish, d.cost + d.demolishCost);
     } else if (d?.error && d.candidate !== null) {
       this.message = d.error;
-    } else if (this.tool === 'road' && d && !d.candidate) {
-      this.message = d.error ?? 'Drag from one point to another to build a road';
     }
     this.cancel();
   }
 
+  /** Drops the road in progress (✕, Escape, another tool) or the bend being dragged. */
   cancel(): void {
     this.start = null;
+    this.end = null;
+    this.bend = 0;
+    this.grab = null;
+    this.chainDir = null;
     this.bendSeg = -1;
     this.draft = null;
     this.changed();
   }
 
-  /** Mouse hover (desktop): show where a road would snap. */
+  /** ✕ / Escape: drops the road in progress and any message about it. */
+  discard(): void {
+    this.message = null;
+    this.cancel();
+  }
+
+  /** Mouse hover (desktop): show where a road would snap, or rubber-band from a placed start. */
   hoverAt(p: Vec3 | null, tol: number): void {
-    if (this.pendingStart && p) {
-      this.move(p, tol); // rubber-band preview from the placed start
+    if (this.pendingStart && p && !this.grab) {
+      this.end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start!).anchor);
+      const s = this.start!.pos;
+      if (Math.hypot(this.end.pos[0] - s[0], this.end.pos[2] - s[2]) < 1) this.end = null;
+      this.refresh();
+      this.end = null; // only a preview: the click places the end
       return;
     }
     if (this.tool !== 'road' || !p || this.start) {
@@ -216,42 +408,18 @@ export class Editor {
     this.changed();
   }
 
-  /**
-   * Tap mode: the first tap places the start (refused where no road can start), the second builds
-   * the road. Tapping the start again cancels; a road that can't be built keeps the start and
-   * shows why, so the player can tap another end.
-   */
+  /** Road tool tap away from the grips: with only a start, the tap places the end. */
   private tapRoad(p: Vec3, tol: number): void {
-    if (!this.start) {
-      const a = this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor);
-      const problem = this.outside(a) ?? this.startProblem(a);
-      if (problem) {
-        this.message = problem;
-      } else {
-        this.start = a;
-        this.hover = null;
-        this.draft = {
-          candidate: null, changed: [], touched: [], markers: [{ pos: a.pos, kind: a.kind }],
-          error: null, cost: 0, demolish: [], demolishCost: 0,
-        };
-      }
+    if (!this.pendingStart) {
+      if (this.pending) this.message = 'Tap ✓ to build the road, or ✕ to drop it · drag its circles to adjust it';
       this.changed();
       return;
     }
-    const s = this.start.pos;
-    if (Math.hypot(p[0] - s[0], p[2] - s[2]) < tol) {
-      this.cancel();
-      return;
-    }
-    this.move(p, tol);
-    const d = this.draft;
-    if (d?.candidate && !d.error && d.touched.length > 0) {
-      this.commit(d.candidate, d.demolish, d.cost + d.demolishCost);
-      this.cancel();
-    } else {
-      this.message = d?.error ?? 'Tap another point to end the road';
-      this.changed();
-    }
+    const end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start!).anchor);
+    const s = this.start!.pos;
+    if (Math.hypot(end.pos[0] - s[0], end.pos[2] - s[2]) < 1) return;
+    this.end = end;
+    this.refresh();
   }
 
   private problemNet: RoadNetwork | null = null;
@@ -300,8 +468,9 @@ export class Editor {
   tap(p: Vec3, tol: number): void {
     this.message = null;
     const net = this.net;
-    if (this.tool === 'road' && this.roadMode === 'tap') {
+    if (this.tool === 'road') {
       this.tapRoad(p, tol);
+      return;
     } else if (this.tool === 'select') {
       const r = roundaboutAt(net, p, tol * 0.5);
       if (r && zoneDistance(this.host.zone, r.centre[0], r.centre[2]) < 0) {
@@ -349,7 +518,7 @@ export class Editor {
       error = e.message;
     }
     const demo = error ? { items: [], cost: 0 } : this.host.demolition(candidate);
-    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost };
+    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [] };
   }
 
   /**

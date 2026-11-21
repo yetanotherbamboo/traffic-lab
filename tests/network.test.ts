@@ -241,6 +241,21 @@ describe('bends between roads (2-road junctions)', () => {
     expect(inspect(bend(90, AVENUE, AVENUE)).area).toBeLessThan(400);
   });
 
+  it('nearly straight joins of different widths get a short taper, not a long junction', () => {
+    for (const deg of [160, 165, 170, 175]) {
+      const net = new RoadNetwork();
+      const o = net.addNode([0, 0, 0]);
+      const a = net.addSegment(o, net.addNode([-60, 0, 0]), AVENUE);
+      const r = (deg * Math.PI) / 180;
+      const b = net.addSegment(o, net.addNode([-60 * Math.cos(r), 0, 60 * Math.sin(r)]), STREET);
+      // Before: the street's end was pulled back 15–46 m (edges crossing on a road's backward extension).
+      expect(net.armTrim(o, a), `${deg}°`).toBeLessThanOrEqual(12.5);
+      expect(net.armTrim(o, b), `${deg}°`).toBeLessThanOrEqual(12.5);
+      // ...and the outside of the join is a straight taper, not a bulge around the node (≈ 560 m² at 170° before).
+      expect(inspect(bend(deg, AVENUE, STREET)).area, `${deg}°`).toBeLessThan(260);
+    }
+  });
+
   it('bends of every angle and width face upwards', () => {
     for (let deg = 30; deg <= 175; deg += 5) {
       for (const [pa, pb] of [[AVENUE, STREET], [STREET, AVENUE], [AVENUE, AVENUE], [ONEWAY, STREET], [STREET, ONEWAY]] as const) {

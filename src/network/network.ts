@@ -106,6 +106,8 @@ export interface Arm {
 const KERB_ROOM = 3;
 /** Kerb room at a corner next to a small road (lanes, alleys): tighter, slower corners. */
 const KERB_ROOM_SMALL = 1.5;
+/** Two roads of different cross-sections within this angle of straight on get a full taper. */
+export const NEAR_STRAIGHT_COS = Math.cos((30 * Math.PI) / 180);
 /** Minimum distance from a junction centre to where a road begins. */
 const MIN_TRIM = 5;
 /** The same where a small road meets the junction. */
@@ -391,6 +393,11 @@ export class RoadNetwork {
     const d0 = this.leaveDir(s0, nodeId);
     const d1 = this.leaveDir(s1, nodeId);
     if (vec3.dot(d0, d1) > -0.985) return true; // more than ~10° away from a straight continuation
+    return this.differentSections(s0, s1, nodeId);
+  }
+
+  /** Do two roads meeting at a node have different cross-sections (lanes each way, widths)? */
+  private differentSections(s0: RoadSegment, s1: RoadSegment, nodeId: number): boolean {
     const l0 = this.lanesAt(s0, nodeId), l1 = this.lanesAt(s1, nodeId);
     const p0 = s0.profile, p1 = s1.profile;
     return l0.incoming !== l1.outgoing || l0.outgoing !== l1.incoming
@@ -398,15 +405,16 @@ export class RoadNetwork {
   }
 
   /**
-   * Smallest junction size. Where 2 roads continue straight (a lane-count change) the taper
-   * needs room to merge; elsewhere the clearance between neighbouring roads decides (`armTrim`).
+   * Smallest junction size. Where 2 roads continue straight (a lane-count change), or nearly
+   * straight (within 30°) with different cross-sections, the taper needs room to change width;
+   * elsewhere the clearance between neighbouring roads decides (`armTrim`).
    */
   private baseRadius(nodeId: number): number {
     const segs = this.node(nodeId).segments;
     if (segs.length === 2) {
-      const d0 = this.leaveDir(this.segments.get(segs[0]!)!, nodeId);
-      const d1 = this.leaveDir(this.segments.get(segs[1]!)!, nodeId);
-      if (vec3.dot(d0, d1) < -0.985) {
+      const s0 = this.segments.get(segs[0]!)!, s1 = this.segments.get(segs[1]!)!;
+      const dot = vec3.dot(this.leaveDir(s0, nodeId), this.leaveDir(s1, nodeId));
+      if (dot < -0.985 || (dot < -NEAR_STRAIGHT_COS && this.differentSections(s0, s1, nodeId))) {
         let half = 0, walk = 0;
         for (const sid of segs) {
           const p = this.segments.get(sid)!.profile;
@@ -456,7 +464,10 @@ export class RoadNetwork {
       const rx = qx - px, rz = qz - pz;
       const t = (rx * -c.dir[2] - rz * -c.dir[0]) / den;
       const u = (a.dir[0] * rz - a.dir[2] * rx) / den;
-      let d = mine === 'a' ? t : u;
+      // The edges only clash where both really run: if the crossing lies on one edge's line
+      // extended back through the node (as for nearly straight joins of different widths, whose
+      // near-parallel edges cross far out), it's no constraint.
+      let d = t > 0 && u > 0 ? (mine === 'a' ? t : u) : 0;
       // Curved arms: the straight edge lines above only hold at the node. Where the real edges
       // bend towards each other they meet sooner along the road, so follow them (never less room).
       const sa = this.segments.get(a.id)!, sc = this.segments.get(c.id)!;

@@ -1,5 +1,5 @@
 import { type Vec3, vec3 } from '../core/math';
-import { type Arm, type RoadNetwork, type RoadSegment, horizontal, rightOf } from '../network/network';
+import { type Arm, NEAR_STRAIGHT_COS, type RoadNetwork, type RoadSegment, horizontal, rightOf } from '../network/network';
 
 /** Vertex layout: pos(3) normal(3) uv(2) lanes(3: forward, backward, width) material(1). */
 export const ROAD_STRIDE = 12;
@@ -157,20 +157,18 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
       const reach = Math.max(Math.hypot(P[0] - centre[0], P[2] - centre[2]), Math.hypot(Q[0] - centre[0], Q[2] - centre[2]));
       if (Math.hypot(X[0] - centre[0], X[2] - centre[2]) < MITRE_REACH * reach) {
         const pts = fillet(P, Q, a, c, hit, samples, OUTER_KERB_R);
-        // The surface is a fan from the node: the kerb must go round it (angles increasing) and
-        // keep clear of it. A one-way road's outer edge is its own centre line, through the node,
-        // so there the kerbs meet at the node itself: keep the arc below instead.
-        let ok = true;
-        for (let k = 0; k < pts.length && ok; k++) {
-          const p = pts[k]!, q = pts[k + 1];
-          if (Math.hypot(p[0] - centre[0], p[2] - centre[2]) < 1) ok = false;
-          else if (q && (p[0] - centre[0]) * (q[2] - centre[2]) - (p[2] - centre[2]) * (q[0] - centre[0]) <= 0) ok = false;
-        }
-        if (ok) return pts;
+        if (goesRound(pts, centre)) return pts;
         cornerRadius = Infinity;
         cornerCentre = null;
         cornerFillet = Infinity;
       }
+    }
+    // Nearly straight on (within 30°), the outer kerbs are almost parallel and meet far out or
+    // not at all: run a straight taper from one road's edge to the other's, like a lane-count change.
+    if (vec3.dot(a.dir, c.dir) < -NEAR_STRAIGHT_COS) {
+      const pts: Vec3[] = [];
+      for (let k = 0; k <= samples; k++) pts.push(vec3.add(P, vec3.scale(vec3.sub(Q, P), k / samples)));
+      if (goesRound(pts, centre)) return pts;
     }
     // Otherwise sweep an arc around the node so the surface stays convex around the centre.
     const ang = (p: Vec3): number => Math.atan2(p[2] - centre[2], p[0] - centre[0]);
@@ -195,6 +193,20 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
     return pts;
   }
   return fillet(P, Q, a, c, hit, samples, Infinity);
+}
+
+/**
+ * The junction surface is a fan from the node, so an outer kerb must go round it (angles
+ * increasing) and keep 1 m clear of it. A one-way road's outer edge is its own centre line, through
+ * the node, so kerbs ending there can't: those corners keep the arc around the node.
+ */
+function goesRound(pts: Vec3[], centre: Vec3): boolean {
+  for (let k = 0; k < pts.length; k++) {
+    const p = pts[k]!, q = pts[k + 1];
+    if (Math.hypot(p[0] - centre[0], p[2] - centre[2]) < 1) return false;
+    if (q && (p[0] - centre[0]) * (q[2] - centre[2]) - (p[2] - centre[2]) * (q[0] - centre[0]) <= 0) return false;
+  }
+  return true;
 }
 
 /**

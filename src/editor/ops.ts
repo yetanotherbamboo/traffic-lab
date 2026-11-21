@@ -4,7 +4,7 @@ import { roadCost } from './cost';
 import { nearestOnSegment } from './pick';
 import { sampleCurve } from './rules';
 import type { Anchor } from './snap';
-import { MAX_ARMS, tooShort } from './validate';
+import { MAX_ARMS, MIN_ANGLE, tooShort } from './validate';
 
 /**
  * Editing operations on a road network. Each mutates the network it is given (the editor runs
@@ -102,26 +102,60 @@ function splitCrossings(net: RoadNetwork, ids: number[]): number[] {
 /** Shown when a new road can't start (or end) at a point; see `anchorProblem`. */
 export const TOO_CLOSE = 'Too close to a junction: start the road further away from it';
 
+/** Shown when a junction has no gap wide enough for another road. */
+export const NO_ROOM = 'No room for another road at this junction';
+
+/** Length of the trial road used by `anchorProblem` (m). */
+const STUB = 30;
+
 /**
  * Can a new road of `profile` attach at this anchor at all, whatever direction it is drawn in?
- * On a road, a new junction there is tried with a perpendicular road (the angle that needs the
- * least room): if even that leaves a piece of the old road too short (`tooShort`), no road can
- * join here. Returns the reason, or null.
+ * Trial roads are added in every direction that could work: both sides of a road (perpendicular,
+ * the angle that needs the least room), or the middle of each gap between a junction's roads.
+ * If every trial leaves a road piece too short (`tooShort`), no road can start here. Returns the
+ * reason, or null.
  */
 export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile): string | null {
   if (a.kind === 'node') {
-    return net.node(a.id).segments.length >= MAX_ARMS ? `At most ${MAX_ARMS} roads can meet at a junction` : null;
+    if (!net.nodes.has(a.id)) return null;
+    const node = net.node(a.id);
+    if (node.segments.length >= MAX_ARMS) return `At most ${MAX_ARMS} roads can meet at a junction`;
+    // Roundabout rings are rebuilt evenly around a new entry, so a trial says nothing there.
+    if (node.ring !== undefined) return null;
+    const arms = net.arms(a.id);
+    if (arms.length === 0) return null;
+    const dirs: number[] = [];
+    if (arms.length === 1) {
+      const h = arms[0]!.angle;
+      dirs.push(h + Math.PI, h + Math.PI / 2, h - Math.PI / 2);
+    } else {
+      for (let i = 0; i < arms.length; i++) {
+        let gap = arms[(i + 1) % arms.length]!.angle - arms[i]!.angle;
+        if (gap <= 0) gap += Math.PI * 2;
+        if (gap >= 2 * MIN_ANGLE) dirs.push(arms[i]!.angle + gap / 2);
+      }
+      if (dirs.length === 0) return NO_ROOM;
+    }
+    for (const h of dirs) {
+      const trial = net.clone();
+      const p = trial.node(a.id).pos;
+      const stub = trial.addSegment(a.id, trial.addNode([p[0] + Math.cos(h) * STUB, 0, p[2] + Math.sin(h) * STUB]), profile);
+      // Only the existing roads count: the new one can be drawn as long as it needs to be.
+      if (!trial.node(a.id).segments.some((id) => id !== stub && tooShort(trial, trial.segment(id)))) return null;
+    }
+    return TOO_CLOSE;
   }
   if (a.kind !== 'segment' || !net.segments.has(a.id)) return null;
-  // Roundabout rings are rebuilt evenly around a new entry, so a plain split says nothing there.
   if (net.segment(a.id).ring !== undefined) return null;
-  const trial = net.clone();
-  const r = rightOf(horizontal(trial.segment(a.id).curve.derivative(a.t)));
-  const { node, first, second } = trial.splitSegment(a.id, a.t);
-  const p = trial.node(node).pos;
-  trial.addSegment(node, trial.addNode([p[0] + r[0] * 30, 0, p[2] + r[2] * 30]), profile);
-  for (const id of [first, second]) if (tooShort(trial, trial.segment(id))) return TOO_CLOSE;
-  return null;
+  for (const side of [1, -1]) {
+    const trial = net.clone();
+    const r = rightOf(horizontal(trial.segment(a.id).curve.derivative(a.t)));
+    const { node, first, second } = trial.splitSegment(a.id, a.t);
+    const p = trial.node(node).pos;
+    trial.addSegment(node, trial.addNode([p[0] + r[0] * STUB * side, 0, p[2] + r[2] * STUB * side]), profile);
+    if (!tooShort(trial, trial.segment(first)) && !tooShort(trial, trial.segment(second))) return null;
+  }
+  return TOO_CLOSE;
 }
 
 /** Builds a straight road between two anchors, adding junctions where it crosses other roads. */

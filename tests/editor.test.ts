@@ -425,6 +425,61 @@ describe('starting a road near a junction', () => {
   });
 });
 
+describe('the red cross only allows starts that can lead somewhere', () => {
+  /** Can a road `len` m long be drawn from `p` in any of 16 directions? */
+  const buildable = (ed: Editor, p: Vec3, from: Vec3, len = 35): boolean => {
+    for (let k = 0; k < 16; k++) {
+      const h = (k / 16) * Math.PI * 2;
+      ed.down(p, 1.5);
+      ed.move([from[0] + Math.cos(h) * len, 0, from[2] + Math.sin(h) * len], 1.5);
+      const ok = ed.draft !== null && ed.draft.error === null;
+      ed.cancel();
+      if (ok) return true;
+    }
+    return false;
+  };
+
+  it('every road type may start at the centre junction, and can be built from there', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    for (const preset of [0, 1, 2, 3]) {
+      ed.preset = preset;
+      ed.hoverAt([0, 0, 0], 1.5);
+      expect(ed.hover!.kind, `preset ${preset}`).toBe('node');
+      // A fifth arm needs a big junction, so the new road must be long enough to leave it.
+      expect(buildable(ed, [0, 0, 0], [0, 0, 0], 55), `preset ${preset}`).toBe(true);
+    }
+  });
+
+  it('every start offered along a road next to new junctions can be built from', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    // New T-junctions on all four arms of the centre crossroads.
+    const roads: [Vec3, Vec3, number][] = [
+      [[30, 0, 0], [30, 0, -70], 0], [[-40, 0, 0], [-40, 0, 60], 1], [[0, 0, 45], [60, 0, 45], 2], [[0, 0, -30], [-70, 0, -50], 0],
+    ];
+    for (const [a, b, preset] of roads) {
+      ed.preset = preset;
+      ed.down(a, 1.5);
+      ed.move(b, 1.5);
+      ed.up();
+    }
+    expect(w.net.node([...w.net.nodes.values()].find((n) => n.pos[0] === 0 && n.pos[2] === 0)!.id).segments.length).toBe(4);
+    ed.preset = 1; // avenue
+    for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      for (let d = 0; d <= 85; d += 1) {
+        const p: Vec3 = [ax! * d, 0, az! * d];
+        ed.hoverAt(p, 1.5);
+        const h = ed.hover!;
+        if (h.kind === 'blocked' || h.kind === 'free') continue;
+        expect(buildable(ed, p, h.pos) || buildable(ed, p, h.pos, 55), `${p} (${h.kind})`).toBe(true);
+      }
+    }
+  });
+});
+
 describe('starting a road near the construction-zone border', () => {
   it('the cut at the border is no junction: roads start next to it (or on it)', () => {
     // A border 70 m from the centre, well clear of the ring street's junctions.

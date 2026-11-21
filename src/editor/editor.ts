@@ -1,11 +1,12 @@
 import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
-import type { LaneProfile, RoadNetwork } from '../network/network';
+import { CubicBezier } from '../network/bezier';
+import { type LaneProfile, type RoadNetwork, horizontal } from '../network/network';
 import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, touchedAround } from './ops';
 import { type Pick, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
-import { type DrawMode, type Shape, bendFrom, bendPoint, continueShape, curveShape, endDirection, straightShape } from './shape';
+import { type DrawMode, type Shape, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, endDirection, straightShape } from './shape';
 import { type Anchor, snapPoint } from './snap';
 import { validate } from './validate';
 
@@ -58,11 +59,25 @@ export interface Draft {
   length: number;
   /** Points the player can drag (the pending road's ends and bend handle). */
   grips: Vec3[];
+  /** Measurements shown next to the finger while drawing, or null. */
+  guide: Guide | null;
+}
+
+/** What the floating label next to a road in progress says, and where it is anchored. */
+export interface Guide {
+  /** The point the label sits above (the grip being dragged, else the road's end). */
+  at: Vec3;
+  /** Length of the road (m). */
+  length: number;
+  /** Angle (degrees) to the nearest road at the start, or null where it starts on open ground. */
+  angle: number | null;
+  /** Speed (km/h) cars slow to on its tightest bend, or null if the bend allows the limit. */
+  slowTo: number | null;
 }
 
 /** A draft that only shows markers (no road yet). */
 function markerDraft(markers: Marker[], error: string | null): Draft {
-  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [] };
+  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null };
 }
 
 const HISTORY_LIMIT = 100;
@@ -214,7 +229,32 @@ export class Editor {
       for (const id of this.draft.changed) len += this.draft.candidate.segments.get(id)?.curve.length ?? 0;
       this.draft.length = len;
     }
+    if (typeof shape !== 'string') {
+      const curve = new CubicBezier(a.pos, shape.c1, shape.c2, b.pos);
+      this.draft.guide = {
+        at: this.grab === 'start' ? a.pos : this.grab === 'bend' ? grips[2] ?? b.pos : b.pos,
+        length: curve.length,
+        angle: this.angleAtStart(a, shape),
+        slowTo: bendSpeed(curve, profile),
+      };
+    }
     this.changed();
+  }
+
+  /** Angle (whole degrees) between the new road and the nearest road already at its start. */
+  private angleAtStart(a: Anchor, shape: Shape): number | null {
+    const net = this.net;
+    let dirs: Vec3[] = [];
+    if (a.kind === 'node' && net.nodes.has(a.id)) dirs = net.arms(a.id).map((x) => x.dir);
+    else if (a.kind === 'segment' && net.segments.has(a.id)) {
+      const d = horizontal(net.segment(a.id).curve.derivative(a.t));
+      dirs = [d, [-d[0], 0, -d[2]]];
+    }
+    if (dirs.length === 0) return null;
+    const mine = horizontal([shape.c1[0] - a.pos[0], 0, shape.c1[2] - a.pos[2]]);
+    let best = Infinity;
+    for (const d of dirs) best = Math.min(best, Math.acos(Math.max(-1, Math.min(1, d[0] * mine[0] + d[2] * mine[2]))));
+    return Math.round((best * 180) / Math.PI);
   }
 
   /**
@@ -518,7 +558,7 @@ export class Editor {
       error = e.message;
     }
     const demo = error ? { items: [], cost: 0 } : this.host.demolition(candidate);
-    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [] };
+    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null };
   }
 
   /**

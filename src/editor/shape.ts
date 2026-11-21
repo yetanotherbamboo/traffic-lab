@@ -1,4 +1,7 @@
 import type { Vec3 } from '../core/math';
+import type { CubicBezier } from '../network/bezier';
+import type { LaneProfile } from '../network/network';
+import { MAX_LAT_ACCEL } from '../sim/laneGraph';
 
 /** How the Road tool shapes a new road between its start and end. */
 export type DrawMode = 'straight' | 'curve' | 'continuous';
@@ -83,4 +86,32 @@ export function endDirection(A: Vec3, B: Vec3, s: Shape): Vec3 {
   if (Math.hypot(dx, dz) < 1e-6) [dx, dz] = [B[0] - A[0], B[2] - A[2]];
   const l = Math.hypot(dx, dz) || 1;
   return [dx / l, 0, dz / l];
+}
+
+/** Tightest radius (m) along a curve, from the turn between pieces about a metre long. */
+export function tightestRadius(c: CubicBezier): number {
+  const n = Math.max(8, Math.ceil(c.length));
+  let best = Infinity, px = 0, pz = 0, prevLen = 0;
+  let prev = c.point(0);
+  for (let i = 1; i <= n; i++) {
+    const p = c.point(c.tAtDistance((c.length * i) / n));
+    const dx = p[0] - prev[0], dz = p[2] - prev[2], len = Math.hypot(dx, dz);
+    if (i > 1 && len > 1e-6 && prevLen > 1e-6) {
+      const turn = Math.abs(Math.atan2(px * dz - pz * dx, px * dx + pz * dz));
+      if (turn > 1e-5) best = Math.min(best, (len + prevLen) / 2 / turn);
+    }
+    [px, pz, prevLen, prev] = [dx, dz, len, p];
+  }
+  return best;
+}
+
+/**
+ * Speed (km/h, rounded down to 5) that cars slow to on this road's tightest bend, measured on its
+ * innermost lane, or null when the bend allows the speed limit.
+ */
+export function bendSpeed(c: CubicBezier, profile: LaneProfile): number | null {
+  const { forward, backward, laneWidth, speedLimit = 50 } = profile;
+  const inner = tightestRadius(c) - (Math.max(forward, backward) - 0.5) * laneWidth;
+  const v = Math.sqrt(MAX_LAT_ACCEL * Math.max(inner, 1)) * 3.6;
+  return v >= speedLimit ? null : Math.max(5, Math.floor(v / 5) * 5);
 }

@@ -102,6 +102,18 @@ function ground(x: number, y: number): { p: Vec3; tol: number } | null {
   return { p, tol: Math.max(1.5, FINGER_PX * metresPerPx) };
 }
 
+/** Ground point → CSS px on the canvas; false when it's behind the camera. */
+function toScreen(p: Vec3, out: [number, number]): boolean {
+  const m = camera.viewProj;
+  const w = m[3]! * p[0] + m[7]! * p[1] + m[11]! * p[2] + m[15]!;
+  if (w <= 1e-6) return false;
+  const x = (m[0]! * p[0] + m[4]! * p[1] + m[8]! * p[2] + m[12]!) / w;
+  const y = (m[1]! * p[0] + m[5]! * p[1] + m[9]! * p[2] + m[13]!) / w;
+  out[0] = (x + 1) / 2 * canvas.clientWidth;
+  out[1] = (1 - y) / 2 * canvas.clientHeight;
+  return true;
+}
+
 controls.tool = {
   down: (x, y) => {
     if (!editor.dragTool) return false;
@@ -192,6 +204,7 @@ const loop = new FixedLoop(
     world.animate(frameDt);
     syncScene();
     camera.update(canvas.width / canvas.height);
+    ui.placeTag(toScreen);
     writeVehicleInstances(world.sim, alpha, vehicleData, vanData, vehicleCounts);
     renderer.setVehicles(vehicleData, vehicleCounts.cars, vanData, vehicleCounts.vans);
     renderer.setProps(props.buffer, props.update());

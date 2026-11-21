@@ -241,10 +241,11 @@ _Last updated: 2026-11-21_
     - `addRoad` takes optional control points. Draft gained `length` (curve length shown in the info) and `grips` (drawn as dots inside the rings).
     - **Checks:** editor tests for ✓/✕, tap-tap, grips, chaining, Curve, Continuous (tangent at the joint, no junction there) and the shape maths (arc within 0.3% of a circle). Headless Chrome at phone size (390×844) drove real mouse gestures: drag → pending → ✓ → chained tap → ✓ → ✕ → Curve with the middle grip dragged 8 m (built road's midpoint exactly there), no console errors. It also found ✕ leaving a stale hint (fixed: `discard` clears messages).
   - **Overlay through buildings (2026-11-21):** the editor overlay is drawn a second time after the lit meshes with `depthFunc(GREATER)`, no depth writes and 50% constant alpha (`OVERLAY_GHOST` in `renderer.ts`), so grips, previews, selections and demolition outlines show as a ghost where buildings, trees or vehicles hide them. +1 draw call while the overlay has anything in it. Checked in headless Chrome: a curve's middle grip behind a building now shows.
+  - **Guidance labels (2026-11-21):** while a road is in progress, a floating `#tag` 56 px above the dragged grip (else the road's end; flipped below near the top, clamped to the screen edges) shows its length, its angle to the nearest road at the start (`Editor.angleAtStart`; none on open ground) and, on tight bends, "bend: cars slow to N km/h" (`bendSpeed`: `sqrt(MAX_LAT_ACCEL · r)` on the innermost lane at the tightest radius, rounded down to 5 km/h, shown only below the limit). `Draft.guide` holds it; `EditorUI.placeTag` re-projects it each frame (style touched only when it moves). Tests: length/angle/bend speed and the label following the middle grip; `bendSpeed` against the formula. Headless Chrome: "25 m · 90°" for a chained right-angle road, the bend warning on a tight curve, tag exactly 56 px above its point.
 
 ### Next
 - [ ] **Road tool, part 2:**
-  - guidance: length and angle labels above the finger, guide lines from nearby roads, a snapping toggle, the advisory speed of tight bends ("cars slow to 25 km/h").
+  - guidance: guide lines from nearby roads (extensions and perpendiculars of road ends), a snapping toggle.
   - Continuous: match the curvature where the new arc meets the previous road (only the direction matches now, so cars may still dip in speed at the join).
   - Later: an Upgrade tool (change a road's type in place), node dragging, drag-to-remove, parallel roads.
 - [ ] **6. Elevation: overpasses, bridges, tunnels.**

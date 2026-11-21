@@ -1,6 +1,7 @@
 import { formatMoney } from '../editor/cost';
 import { type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
 import type { DrawMode } from '../editor/shape';
+import type { Vec3 } from '../core/math';
 import { MAX_LANES, setControl, setEntrance, setFreeFlow, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
 import {
   RING_MAX_LANES, RING_MIN_LANES, convertToRoundabout, outerRadius, removeRoundabout, setRoundaboutLanes, setRoundaboutSize,
@@ -72,6 +73,8 @@ export class EditorUI {
   private readonly toolbar = document.getElementById('toolbar')!;
   private readonly info = document.getElementById('info')!;
   private readonly panel = document.getElementById('panel')!;
+  private readonly tag = document.getElementById('tag')!;
+  private tagAt: Vec3 | null = null;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
@@ -116,6 +119,7 @@ export class EditorUI {
     this.undoBtn.disabled = !ed.canUndo;
     this.redoBtn.disabled = !ed.canRedo;
     this.renderInfo();
+    this.renderTag();
     const sel = ed.selection;
     const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
     if (key !== this.panelKey) {
@@ -153,6 +157,46 @@ export class EditorUI {
     this.info.replaceChildren(...out.filter((c): c is Node | string => !!c));
     this.info.hidden = false;
   }
+
+  /** The floating label's text: "42 m · 90°", and the bend speed when cars must slow down. */
+  private renderTag(): void {
+    const g = this.editor.tool === 'road' ? this.editor.draft?.guide ?? null : null;
+    this.tagAt = g?.at ?? null;
+    if (!g) {
+      this.tag.hidden = true;
+      return;
+    }
+    const top = `${g.length.toFixed(0)} m${g.angle !== null ? ` · ${g.angle}°` : ''}`;
+    this.tag.replaceChildren(top, ...(g.slowTo !== null ? [h('span', { class: 'slow' }, `bend: cars slow to ${g.slowTo} km/h`)] : []));
+    this.tag.hidden = false;
+  }
+
+  /**
+   * Call every frame after the camera moved: keeps the label above its point on screen.
+   * `project` maps a ground point to CSS pixels, or returns false when it is behind the camera.
+   */
+  placeTag(project: (p: Vec3, out: [number, number]) => boolean): void {
+    if (!this.tagAt || this.tag.hidden) return;
+    const s = this.screen;
+    if (!project(this.tagAt, s)) {
+      this.tag.style.transform = 'translate(-9999px, 0)';
+      this.tagX = NaN;
+      return;
+    }
+    const lift = 56; // px between the point and the label: clear of a fingertip
+    const above = s[1] - lift - this.tag.offsetHeight > 70; // keep clear of the stats at the top
+    const y = above ? s[1] - lift - this.tag.offsetHeight : s[1] + lift;
+    const x = Math.min(Math.max(s[0] - this.tag.offsetWidth / 2, 6), window.innerWidth - this.tag.offsetWidth - 6);
+    const rx = Math.round(x), ry = Math.round(y);
+    if (rx === this.tagX && ry === this.tagY) return;
+    this.tagX = rx;
+    this.tagY = ry;
+    this.tag.style.transform = `translate(${rx}px, ${ry}px)`;
+  }
+
+  private readonly screen: [number, number] = [0, 0];
+  private tagX = NaN;
+  private tagY = NaN;
 
   /** "42 m · 120 k€ · demolishes 3 items (45 k€)" */
   private costLine(d: NonNullable<Editor['draft']>): Child[] {

@@ -6,7 +6,7 @@ import { Editor, ROAD_PRESETS } from '../src/editor/editor';
 import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, setLanes, setTurns } from '../src/editor/ops';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
 import { CubicBezier } from '../src/network/bezier';
-import { TOO_SHARP, bendFrom, bendPoint, continueShape, curveShape } from '../src/editor/shape';
+import { TOO_SHARP, bendFrom, bendPoint, bendSpeed, continueShape, curveShape } from '../src/editor/shape';
 import { snapPoint } from '../src/editor/snap';
 import { validate } from '../src/editor/validate';
 import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
@@ -771,6 +771,45 @@ describe('saving and resetting the city', () => {
     expect(w.sim.stats.vehicles).toBeGreaterThan(0);
     // A save of the new city only fits a world grown from the same seed.
     expect(() => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners).restore(w.snapshot())).toThrow();
+  });
+});
+
+describe('guidance labels', () => {
+  it('length, angle to the road it starts from, and the speed of a tight bend', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    // From open ground: length, no angle.
+    ed.down([30, 0, 30], 1.5);
+    ed.move([30, 0, 55], 1.5);
+    expect(ed.draft!.guide!.length).toBeCloseTo(25, 1);
+    expect(ed.draft!.guide!.angle).toBeNull();
+    expect(ed.draft!.guide!.slowTo).toBeNull();
+    expect(ed.draft!.guide!.at).toEqual([30, 0, 55]); // above the finger's point
+    ed.up();
+    ed.discard();
+    // Off the avenue east of the centre, straight south: 90° to it.
+    ed.down([50, 0, 0], 1.5);
+    ed.move([50, 0, 40], 1.5);
+    expect(ed.draft!.guide!.angle).toBe(90);
+    ed.up();
+    // A tight curve: cars slow down, and the label follows the middle grip while it's dragged.
+    ed.setDrawMode('curve');
+    ed.down([50, 0, 20], 1.5);
+    ed.move([62, 0, 20], 1.5);
+    expect(ed.draft!.guide!.slowTo).not.toBeNull();
+    expect(ed.draft!.guide!.slowTo!).toBeLessThan(40);
+    expect(ed.draft!.guide!.at[0]).toBeCloseTo(62, 6);
+  });
+
+  it('bendSpeed: none on gentle bends, about sqrt(3 m/s² · r) on the inner lane of tight ones', () => {
+    const street = ROAD_PRESETS[0]!.profile;
+    expect(bendSpeed(CubicBezier.line([0, 0, 0], [50, 0, 0]), street)).toBeNull();
+    const s = continueShape([0, 0, 0], [30, 0, 30], [1, 0, 0]); // quarter circle, R = 30
+    if (typeof s === 'string') throw new Error(s);
+    const v = bendSpeed(new CubicBezier([0, 0, 0], s.c1, s.c2, [30, 0, 30]), street)!;
+    const expected = Math.sqrt(3 * (30 - 0.5 * street.laneWidth)) * 3.6;
+    expect(v).toBe(Math.floor(expected / 5) * 5);
   });
 });
 

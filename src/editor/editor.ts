@@ -61,6 +61,8 @@ export interface Draft {
   grips: Vec3[];
   /** Measurements shown next to the finger while drawing, or null. */
   guide: Guide | null;
+  /** Guide lines the road's end (or moved start) snapped onto, drawn dashed. */
+  lines: [Vec3, Vec3][];
 }
 
 /** What the floating label next to a road in progress says, and where it is anchored. */
@@ -77,7 +79,7 @@ export interface Guide {
 
 /** A draft that only shows markers (no road yet). */
 function markerDraft(markers: Marker[], error: string | null): Draft {
-  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null };
+  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null, lines: [] };
 }
 
 const HISTORY_LIMIT = 100;
@@ -94,6 +96,10 @@ export class Editor {
   preset = 0;
   /** How the Road tool shapes new roads. */
   drawMode: DrawMode = 'straight';
+  /** Snap free points to guide lines, angle steps and whole metres (joining roads always snaps). */
+  snapping = true;
+  /** Guide lines used by the last snap. */
+  private lines: [Vec3, Vec3][] = [];
   selection: Pick = null;
   draft: Draft | null = null;
   hover: Marker | null = null;
@@ -138,6 +144,18 @@ export class Editor {
   /** Drag tools may take single-finger drags (`down` decides); the other tools leave them to the camera. */
   get dragTool(): boolean {
     return this.tool === 'road' || this.tool === 'bend';
+  }
+
+  /** Snaps a point for the Road tool, remembering the guide lines it used. */
+  private snapAt(p: Vec3, tol: number, from?: Anchor): Anchor {
+    const sn = snapPoint(this.net, this.host.zone, p, tol, from, this.snapping);
+    this.lines = sn.guides;
+    return this.settle(sn.anchor);
+  }
+
+  setSnapping(on: boolean): void {
+    this.snapping = on;
+    this.changed();
   }
 
   /** Picks the road type; a pending road changes with it. */
@@ -224,6 +242,7 @@ export class Editor {
     const op = (net: RoadNetwork): EditResult => addRoad(net, a, b, profile, typeof shape === 'string' ? straightShape(a.pos, b.pos) : shape);
     this.draft = this.preview(op, markers, err);
     this.draft.grips = grips;
+    this.draft.lines = this.lines;
     if (this.draft.candidate && typeof shape !== 'string') {
       let len = 0;
       for (const id of this.draft.changed) len += this.draft.candidate.segments.get(id)?.curve.length ?? 0;
@@ -346,7 +365,7 @@ export class Editor {
       this.grabbedOld = true;
       return true;
     }
-    const a = this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor);
+    const a = this.snapAt(p, tol);
     const problem = this.outside(a) ?? this.startProblem(a);
     if (problem) {
       // Nothing gets built from here: keep the red cross under the finger until it lifts.
@@ -366,12 +385,12 @@ export class Editor {
   move(p: Vec3, tol: number): void {
     if (this.tool === 'road' && this.start && this.grab) {
       if (this.grab === 'new' || this.grab === 'end') {
-        const end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start).anchor);
+        const end = this.snapAt(p, tol, this.start);
         // Too close to the start to be a road: keep only the start.
         this.end = Math.hypot(end.pos[0] - this.start.pos[0], end.pos[2] - this.start.pos[2]) < 1 ? null : end;
       } else if (this.grab === 'start' && this.end) {
         const keep = { start: this.start.pos, end: this.end.pos };
-        this.start = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.end).anchor);
+        this.start = this.snapAt(p, tol, this.end);
         this.chainDir = null; // no longer where the previous road ended
         if (Math.hypot(keep.end[0] - this.start.pos[0], keep.end[2] - this.start.pos[2]) < 1) this.start = { kind: 'free', pos: keep.start };
       } else if (this.grab === 'bend' && this.end) {
@@ -410,6 +429,7 @@ export class Editor {
 
   /** Drops the road in progress (✕, Escape, another tool) or the bend being dragged. */
   cancel(): void {
+    this.lines = [];
     this.start = null;
     this.end = null;
     this.bend = 0;
@@ -429,7 +449,7 @@ export class Editor {
   /** Mouse hover (desktop): show where a road would snap, or rubber-band from a placed start. */
   hoverAt(p: Vec3 | null, tol: number): void {
     if (this.pendingStart && p && !this.grab) {
-      this.end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start!).anchor);
+      this.end = this.snapAt(p, tol, this.start!);
       const s = this.start!.pos;
       if (Math.hypot(this.end.pos[0] - s[0], this.end.pos[2] - s[2]) < 1) this.end = null;
       this.refresh();
@@ -443,7 +463,7 @@ export class Editor {
       }
       return;
     }
-    const a = this.settle(snapPoint(this.net, this.host.zone, p, tol).anchor);
+    const a = this.snapAt(p, tol);
     this.hover = { pos: a.pos, kind: this.startProblem(a) ? 'blocked' : a.kind };
     this.changed();
   }
@@ -455,7 +475,7 @@ export class Editor {
       this.changed();
       return;
     }
-    const end = this.settle(snapPoint(this.net, this.host.zone, p, tol, this.start!).anchor);
+    const end = this.snapAt(p, tol, this.start!);
     const s = this.start!.pos;
     if (Math.hypot(end.pos[0] - s[0], end.pos[2] - s[2]) < 1) return;
     this.end = end;
@@ -558,7 +578,7 @@ export class Editor {
       error = e.message;
     }
     const demo = error ? { items: [], cost: 0 } : this.host.demolition(candidate);
-    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null };
+    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null, lines: [] };
   }
 
   /**

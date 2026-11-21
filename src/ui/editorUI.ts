@@ -121,7 +121,7 @@ export class EditorUI {
     this.renderInfo();
     this.renderTag();
     const sel = ed.selection;
-    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
+    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${ed.snapping}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
     if (key !== this.panelKey) {
       this.panelKey = key;
       this.renderPanel();
@@ -220,6 +220,8 @@ export class EditorUI {
         }))));
       body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Shape'),
         ...SHAPES.map(([m, label]) => chip(label, ed.drawMode === m, () => ed.setDrawMode(m)))));
+      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Snapping'),
+        chip('On', ed.snapping, () => ed.setSnapping(true)), chip('Off', !ed.snapping, () => ed.setSnapping(false))));
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {

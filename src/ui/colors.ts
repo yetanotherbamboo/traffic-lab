@@ -19,4 +19,5 @@ export const OVERLAY = {
   select: hexToVec('#7cc6fe'),
   major: hexToVec('#ffd86b'),
   demolish: hexToVec('#ff7a6b'),
+  guide: hexToVec('#7cc6fe'),
 };

@@ -774,6 +774,63 @@ describe('saving and resetting the city', () => {
   });
 });
 
+describe('guide lines', () => {
+  /** A dead-end street from (0,0) to (40,0), and one from (100,30) to (130,30). */
+  const net = () => {
+    const n = new RoadNetwork();
+    n.addSegment(n.addNode([0, 0, 0]), n.addNode([40, 0, 0]), STREET);
+    n.addSegment(n.addNode([100, 0, 30]), n.addNode([130, 0, 30]), STREET);
+    return n;
+  };
+  const near = (p: Vec3, x: number, z: number) => expect(Math.hypot(p[0] - x, p[2] - z)).toBeLessThan(1e-6);
+
+  it('snaps onto the extension of a road and onto perpendiculars at its end', () => {
+    const s = snapPoint(net(), zone, [70, 0, 1.2], 2);
+    near(s.anchor.pos, 70, 0);
+    expect(s.guides.length).toBe(1);
+    near(s.guides[0]![0], 40, 0); // drawn from the road end
+    near(snapPoint(net(), zone, [40.8, 0, -25], 2).anchor.pos, 40, -25);
+  });
+
+  it('snaps to where two guides cross, and to where the start\'s angle step crosses a guide', () => {
+    // x = 40 (perpendicular at the first road's end) meets z = 30 (extension of the second road).
+    const s = snapPoint(net(), zone, [41.2, 0, 31.1], 2);
+    near(s.anchor.pos, 40, 30);
+    expect(s.guides.length).toBe(2);
+    // From (0, 60) heading 0° (east, an angle step) the end lands on the x = 40 guide exactly.
+    const t = snapPoint(net(), zone, [40.9, 0, 60.4], 2, free(0, 60));
+    expect(t.aligned).toBe(true);
+    near(t.anchor.pos, 40, 60);
+  });
+
+  it('snapping off: free points stay where they are (roads and junctions still connect)', () => {
+    const s = snapPoint(net(), zone, [70.3, 0, 1.2], 2, undefined, false);
+    near(s.anchor.pos, 70.3, 1.2);
+    expect(s.guides).toEqual([]);
+    expect(snapPoint(net(), zone, [20, 0, 0.5], 2, undefined, false).anchor.kind).toBe('segment');
+  });
+
+  it('the Road tool shows the guides its end snapped onto', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    ed.down([30, 0, 30], 1.5);
+    ed.move([30, 0, 55], 1.5);
+    ed.up();
+    ed.confirm();
+    ed.discard();
+    // A second road from elsewhere ending level with the first one's end, (30, 55).
+    ed.down([60, 0, 30], 1.5);
+    ed.move([60.6, 0, 54.2], 1.5);
+    expect(ed.draft!.lines.length).toBeGreaterThan(0);
+    const end = ed.draft!.markers[1]!.pos;
+    expect(end[2]).toBeCloseTo(55, 6);
+    ed.setSnapping(false);
+    ed.move([60.6, 0, 54.2], 1.5);
+    expect(ed.draft!.lines).toEqual([]);
+  });
+});
+
 describe('guidance labels', () => {
   it('length, angle to the road it starts from, and the speed of a tight bend', () => {
     const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);

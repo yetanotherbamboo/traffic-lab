@@ -37,6 +37,14 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
       }
     }
     for (const m of d.markers) marker(ob, m, d.error && m.kind === 'free' ? color : MARKER_COLOR[m.kind]);
+    // Guide lines the end snapped onto: dashed, from the road end they come from.
+    for (const [a, b] of d.lines) {
+      const len = Math.hypot(b[0] - a[0], b[2] - a[2]);
+      for (let s = 1.5; s < len - 0.5; s += 3.5) {
+        const t0 = s / len, t1 = Math.min(s + 2, len) / len;
+        ob.strip([a[0] + (b[0] - a[0]) * t0, 0, a[2] + (b[2] - a[2]) * t0], [a[0] + (b[0] - a[0]) * t1, 0, a[2] + (b[2] - a[2]) * t1], 0.55, OVERLAY.guide);
+      }
+    }
     // Grips of a pending road: a filled dot inside each circle says "drag me".
     for (const g of d.grips) ob.dot(g, 1.3, OVERLAY.segment);
     for (const id of d.demolish) {

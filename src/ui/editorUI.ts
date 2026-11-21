@@ -39,7 +39,7 @@ export function turnGlyphs(mask: number): string {
   return (mask & TURN_LEFT ? '←' : '') + (mask & TURN_STRAIGHT ? '↑' : '') + (mask & TURN_RIGHT ? '→' : '') || '·';
 }
 
-const SHAPES: [DrawMode, string][] = [['straight', 'Straight'], ['curve', 'Curve'], ['continuous', 'Continuous']];
+const SHAPES: [DrawMode, string][] = [['straight', 'Straight'], ['curve', 'Curve'], ['continuous', 'Continuous'], ['upgrade', 'Upgrade']];
 
 const CONTROLS: [JunctionControl, string][] = [['priority', 'Priority'], ['allway', 'All-way stop'], ['signal', 'Signals']];
 
@@ -151,6 +151,8 @@ export class EditorUI {
         : 'Tap where the road ends, or drag from its start');
     } else if (ed.message) {
       out.push(h('span', { class: 'err' }, ed.message));
+    } else if (ed.tool === 'road' && ed.drawMode === 'upgrade') {
+      out.push(`Tap roads to make them ${ROAD_PRESETS[ed.preset]!.name} · tap a one-way road again to reverse it`);
     } else {
       out.push(HINTS[ed.tool]);
     }
@@ -218,10 +220,12 @@ export class EditorUI {
         chip(`${p.name} ${p.profile.forward}${p.profile.backward ? `+${p.profile.backward}` : ''}`, ed.preset === i, () => {
           ed.setPreset(i);
         }))));
-      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Shape'),
+      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Mode'),
         ...SHAPES.map(([m, label]) => chip(label, ed.drawMode === m, () => ed.setDrawMode(m)))));
-      body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Snapping'),
-        chip('On', ed.snapping, () => ed.setSnapping(true)), chip('Off', !ed.snapping, () => ed.setSnapping(false))));
+      if (ed.drawMode !== 'upgrade') {
+        body.push(h('div', { class: 'row' }, h('span', { class: 'label' }, 'Snapping'),
+          chip('On', ed.snapping, () => ed.setSnapping(true)), chip('Off', !ed.snapping, () => ed.setSnapping(false))));
+      }
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {

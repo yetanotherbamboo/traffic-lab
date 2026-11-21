@@ -250,6 +250,40 @@ export function setLanes(net: RoadNetwork, segId: number, forward: number, backw
   return { changed: [segId], touched: touchedAround(net, [segId]), cost };
 }
 
+/**
+ * Upgrade: gives a road another type (lanes, widths, sidewalks, speed) and keeps its shape and
+ * junctions. A one-way road keeps its direction; a road that already is this type is reversed if
+ * it's one-way (as in Cities: Skylines), else refused.
+ */
+export function upgradeRoad(net: RoadNetwork, segId: number, profile: LaneProfile): EditResult {
+  const seg = net.segment(segId);
+  if (seg.ring !== undefined) throw new EditError('Roundabouts have their own lanes: change them with the Edit tool');
+  const p = seg.profile;
+  // Keep a one-way road's direction: one running b → a takes the preset the same way round.
+  const against = p.forward === 0 && p.backward > 0;
+  let next: LaneProfile = against ? { ...profile, forward: profile.backward, backward: profile.forward } : { ...profile };
+  const same = next.forward === p.forward && next.backward === p.backward && next.laneWidth === p.laneWidth
+    && next.sidewalk === p.sidewalk && (next.speedLimit ?? 50) === (p.speedLimit ?? 50);
+  if (same) {
+    if (p.forward === p.backward) throw new EditError('This road already is that type');
+    next = { ...next, forward: p.backward, backward: p.forward };
+  }
+  const before = roadCost(seg);
+  const around = [...new Set([seg.a, seg.b].flatMap((n) => net.node(n).segments))];
+  const shortBefore = new Set(around.filter((id) => tooShort(net, net.segment(id))));
+  seg.profile = next;
+  if ((net.node(seg.a).entrance || net.node(seg.b).entrance) && around.some((id) => !shortBefore.has(id) && tooShort(net, net.segment(id)))) {
+    throw new EditError('Not enough room for a wider road here');
+  }
+  if (next.forward !== p.forward || next.backward !== p.backward) {
+    delete seg.turnsA;
+    delete seg.turnsB;
+  }
+  // Widening pays for the new asphalt; otherwise only for repainting.
+  const cost = Math.max(roadCost(seg) - before, seg.curve.length * 0.05);
+  return { changed: [segId], touched: touchedAround(net, [segId]), cost };
+}
+
 export function setSpeed(net: RoadNetwork, segId: number, kmh: number): EditResult {
   const seg = net.segment(segId);
   seg.profile = { ...seg.profile, speedLimit: kmh };

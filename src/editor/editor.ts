@@ -2,7 +2,7 @@ import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import { CubicBezier } from '../network/bezier';
 import { type LaneProfile, type RoadNetwork, horizontal } from '../network/network';
-import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, touchedAround } from './ops';
+import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, touchedAround, upgradeRoad } from './ops';
 import { type Pick, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
@@ -167,6 +167,8 @@ export class Editor {
 
   /** Changes how roads are shaped; a pending road is reshaped in place. */
   setDrawMode(m: DrawMode): void {
+    if ((m === 'upgrade') !== (this.drawMode === 'upgrade')) this.cancel(); // drawing and upgrading don't mix
+    this.hover = null;
     this.drawMode = m;
     this.bend = 0;
     this.message = null;
@@ -347,6 +349,7 @@ export class Editor {
    * with only a start, a drag from it pulls out the end; with nothing yet, place the start here.
    */
   private downRoad(p: Vec3, tol: number): boolean {
+    if (this.drawMode === 'upgrade') return false; // taps upgrade; drags move the view
     const near = (q: Vec3): number => Math.hypot(q[0] - p[0], q[2] - p[2]);
     if (this.start && this.end) {
       const grips: ['start' | 'end' | 'bend', Vec3][] = [['start', this.start.pos], ['end', this.end.pos]];
@@ -446,8 +449,25 @@ export class Editor {
     this.cancel();
   }
 
+  /** Upgrade mode: the road under the finger takes the chosen type (or a one-way road turns round). */
+  private upgradeAt(p: Vec3, tol: number): void {
+    const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
+    if (pick?.kind !== 'segment') {
+      this.message = 'Tap a road inside the zone to change it to this type';
+      this.changed();
+      return;
+    }
+    this.apply((n) => upgradeRoad(n, pick.id, ROAD_PRESETS[this.preset]!.profile));
+  }
+
   /** Mouse hover (desktop): show where a road would snap, or rubber-band from a placed start. */
   hoverAt(p: Vec3 | null, tol: number): void {
+    if (this.tool === 'road' && this.drawMode === 'upgrade') {
+      const pick = p ? pickAt(this.net, p, tol, { node: () => false, segment: this.editable }) : null;
+      this.hover = pick?.kind === 'segment' ? { pos: pick.pos, kind: this.net.segment(pick.id).ring === undefined ? 'segment' : 'blocked' } : null;
+      this.changed();
+      return;
+    }
     if (this.pendingStart && p && !this.grab) {
       this.end = this.snapAt(p, tol, this.start!);
       const s = this.start!.pos;
@@ -470,6 +490,10 @@ export class Editor {
 
   /** Road tool tap away from the grips: with only a start, the tap places the end. */
   private tapRoad(p: Vec3, tol: number): void {
+    if (this.drawMode === 'upgrade') {
+      this.upgradeAt(p, tol);
+      return;
+    }
     if (!this.pendingStart) {
       if (this.pending) this.message = 'Tap ✓ to build the road, or ✕ to drop it · drag its circles to adjust it';
       this.changed();

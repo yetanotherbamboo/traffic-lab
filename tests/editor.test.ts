@@ -3,7 +3,8 @@ import type { Vec3 } from '../src/core/math';
 import { itemsHitByRoads } from '../src/env/city';
 import { zoneDistance } from '../src/env/zone';
 import { Editor, ROAD_PRESETS } from '../src/editor/editor';
-import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, setLanes, setTurns } from '../src/editor/ops';
+import { TOO_CLOSE, addRoad, bendRoad, deleteRoad, setLanes, setTurns, upgradeRoad } from '../src/editor/ops';
+import { convertToRoundabout } from '../src/editor/roundabout';
 import { BOUNDARY_TOL, segmentEditable, splitAtZone } from '../src/editor/rules';
 import { CubicBezier } from '../src/network/bezier';
 import { TOO_SHARP, bendFrom, bendPoint, bendSpeed, continueShape, curveShape } from '../src/editor/shape';
@@ -771,6 +772,78 @@ describe('saving and resetting the city', () => {
     expect(w.sim.stats.vehicles).toBeGreaterThan(0);
     // A save of the new city only fits a world grown from the same seed.
     expect(() => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners).restore(w.snapshot())).toThrow();
+  });
+});
+
+describe('Upgrade mode', () => {
+  const make = () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    return { w, ed };
+  };
+  /** A tap as the camera controller delivers it. */
+  const tapAt = (ed: Editor, p: Vec3): void => {
+    if (ed.down(p, 1.5)) ed.up();
+    else ed.tap(p, 1.5);
+  };
+  const build = (ed: Editor, a: Vec3, b: Vec3): void => {
+    ed.down(a, 1.5); ed.move(b, 1.5); ed.up(); ed.confirm(); ed.discard();
+  };
+  const segAt = (w: World, x: number, z: number) => [...w.net.segments.values()]
+    .find((s) => { const p = s.curve.point(0.5); return Math.hypot(p[0] - x, p[2] - z) < 1; })!;
+
+  it('gives a road another type, keeping its shape and junctions; undo puts it back', () => {
+    const { w, ed } = make();
+    build(ed, [30, 0, 30], [30, 0, 70]);
+    const seg = segAt(w, 30, 50);
+    const { a, b } = seg, len = seg.curve.length, spent = w.spent;
+    ed.setDrawMode('upgrade');
+    expect(ed.down([30, 0, 50], 1.5)).toBe(false); // drags move the view
+    ed.setPreset(1); // avenue
+    tapAt(ed, [30, 0, 50]);
+    expect(ed.message).toBeNull();
+    const up = w.net.segment(seg.id);
+    expect([up.profile.forward, up.profile.backward]).toEqual([2, 2]);
+    expect([up.a, up.b]).toEqual([a, b]);
+    expect(up.curve.length).toBeCloseTo(len, 6);
+    expect(w.spent).toBeGreaterThan(spent);
+    ed.undo();
+    expect(w.net.segment(seg.id).profile.forward).toBe(1);
+  });
+
+  it('a one-way keeps its direction; tapping it again with the same type reverses it', () => {
+    const { w, ed } = make();
+    ed.setPreset(2); // one-way 2
+    build(ed, [30, 0, 70], [30, 0, 30]); // drawn northwards
+    const id = segAt(w, 30, 50).id;
+    const flows = () => { // direction of travel, as +1 (towards +z) or -1
+      const s = w.net.segment(id);
+      const dz = w.net.node(s.b).pos[2] - w.net.node(s.a).pos[2];
+      return Math.sign(dz) * (s.profile.forward > 0 ? 1 : -1);
+    };
+    expect(flows()).toBe(-1);
+    ed.setDrawMode('upgrade');
+    ed.setPreset(4); // lane: one-way, one lane
+    tapAt(ed, [30, 0, 50]);
+    expect(w.net.segment(id).profile.laneWidth).toBe(3);
+    expect(flows()).toBe(-1);
+    tapAt(ed, [30, 0, 50]); // same type again: turned round
+    expect(flows()).toBe(1);
+    // A two-way road that already is this type: nothing to do.
+    ed.setPreset(0);
+    tapAt(ed, [30, 0, 50]);
+    ed.setPreset(0);
+    tapAt(ed, [30, 0, 50]);
+    expect(ed.message).toBe('This road already is that type');
+  });
+
+  it('roundabout rings are left to the Edit tool', () => {
+    const net = buildTestNetwork();
+    const centre = [...net.nodes.values()].find((n) => n.pos[0] === 0 && n.pos[2] === 0)!;
+    convertToRoundabout(net, centre.id);
+    const ring = [...net.segments.values()].find((s) => s.ring !== undefined)!;
+    expect(() => upgradeRoad(net, ring.id, ROAD_PRESETS[1]!.profile)).toThrow('Roundabouts have their own lanes');
   });
 });
 

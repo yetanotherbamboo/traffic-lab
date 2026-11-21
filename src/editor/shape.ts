@@ -3,8 +3,8 @@ import type { CubicBezier } from '../network/bezier';
 import type { LaneProfile } from '../network/network';
 import { MAX_LAT_ACCEL } from '../sim/laneGraph';
 
-/** How the Road tool shapes a new road between its start and end. */
-export type DrawMode = 'straight' | 'curve' | 'continuous';
+/** How the Road tool shapes a new road between its start and end, or 'upgrade': tap roads to change their type. */
+export type DrawMode = 'straight' | 'curve' | 'continuous' | 'upgrade';
 
 /** Cubic Bezier control points of a road from A to B. */
 export interface Shape {

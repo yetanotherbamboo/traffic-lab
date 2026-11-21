@@ -37,6 +37,17 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
       }
     }
     for (const m of d.markers) marker(ob, m, d.error && m.kind === 'free' ? color : MARKER_COLOR[m.kind]);
+    // Remove sweep: the roads that will go, outlined in red along both edges and the middle.
+    for (const id of d.removing) {
+      const seg = w.net.segments.get(id);
+      if (!seg) continue;
+      const { forward: f, backward: b, laneWidth: lw, sidewalk } = seg.profile;
+      const [s0, s1] = w.net.trimmedRange(seg);
+      const ext = Math.max(f, b) * lw + sidewalk;
+      ob.curve(seg.curve, OVERLAY.error, 0.8, s0, s1, ext);
+      ob.curve(seg.curve, OVERLAY.error, 0.8, s0, s1, -ext);
+      ob.curve(seg.curve, OVERLAY.error, 1.2, s0, s1);
+    }
     // Guide lines the end snapped onto: dashed, from the road end they come from.
     for (const [a, b] of d.lines) {
       const len = Math.hypot(b[0] - a[0], b[2] - a[2]);

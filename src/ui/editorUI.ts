@@ -28,7 +28,7 @@ const HINTS: Record<Tool, string> = {
   road: 'Drag from one point to another, or tap the start and then the end · two fingers move the view',
   bend: 'Drag a junction or road end to move it · drag the middle of a road to bend it',
   select: 'Tap a road, junction or roundabout to change it',
-  delete: 'Tap a road to remove it',
+  delete: 'Tap a road to remove it, or drag across several · drags starting off a road move the view',
 };
 
 /** Lane turn options a lane button cycles through (0 = automatic). */
@@ -140,6 +140,9 @@ export class EditorUI {
       const ok = chip('✓ Build', false, () => ed.confirm(), 'go') as HTMLButtonElement;
       ok.disabled = !ed.canConfirm;
       out.push(stop(), text, ok);
+    } else if (ed.tool === 'delete' && d) {
+      const n = d.removing.length;
+      out.push(n === 0 ? 'Drag across the roads to remove' : h('span', {}, 'Lift to remove ', h('b', {}, `${n} ${n === 1 ? 'road' : 'roads'}`), ' · Undo brings them back'));
     } else if (d?.candidate && ed.tool === 'bend') {
       out.push(...(d.error ? [h('span', { class: 'err' }, d.error)] : this.costLine(d)));
     } else if (ed.tool === 'road' && ed.pendingStart) {

@@ -63,6 +63,8 @@ export interface Draft {
   guide: Guide | null;
   /** Guide lines the road's end (or moved start) snapped onto, drawn dashed. */
   lines: [Vec3, Vec3][];
+  /** Remove tool sweep: roads (live ids) that lifting the finger will remove. */
+  removing: number[];
 }
 
 /** What the floating label next to a road in progress says, and where it is anchored. */
@@ -79,7 +81,7 @@ export interface Guide {
 
 /** A draft that only shows markers (no road yet). */
 function markerDraft(markers: Marker[], error: string | null): Draft {
-  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null, lines: [] };
+  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null, lines: [], removing: [] };
 }
 
 const HISTORY_LIMIT = 100;
@@ -123,6 +125,10 @@ export class Editor {
   private bendSeg = -1;
   /** Reshape tool: the junction or road end being dragged, or -1. */
   private moveId = -1;
+  /** Remove tool: roads swept by the current drag, and where the finger last was. */
+  private sweeping = false;
+  private sweep: number[] = [];
+  private sweepAt: Vec3 | null = null;
   private readonly past: unknown[] = [];
   private readonly future: unknown[] = [];
   /** Bumped on every change, so views know when to refresh. */
@@ -145,7 +151,7 @@ export class Editor {
 
   /** Drag tools may take single-finger drags (`down` decides); the other tools leave them to the camera. */
   get dragTool(): boolean {
-    return this.tool === 'road' || this.tool === 'bend';
+    return this.tool === 'road' || this.tool === 'bend' || this.tool === 'delete';
   }
 
   /** Snaps a point for the Road tool, remembering the guide lines it used. */
@@ -341,6 +347,15 @@ export class Editor {
   down(p: Vec3, tol: number): boolean {
     this.message = null;
     if (this.tool === 'road') return this.downRoad(p, tol);
+    if (this.tool === 'delete') {
+      // A drag that starts on a road sweeps roads away; one that starts elsewhere moves the view.
+      if (this.removable(p, tol) === null) return false;
+      this.sweeping = true;
+      this.sweep = [];
+      this.sweepAt = null;
+      this.move(p, tol);
+      return true;
+    }
     if (this.tool === 'bend') {
       const pick = pickAt(this.net, p, tol, { node: this.movable, segment: this.editable });
       if (pick?.kind === 'node') {
@@ -418,6 +433,19 @@ export class Editor {
         this.bend = bendFrom(this.start.pos, this.end.pos, [p[0], 0, p[2]]);
       }
       this.refresh();
+    } else if (this.tool === 'delete' && this.sweeping) {
+      // Check points along the finger's path, so a quick swipe doesn't skip a road.
+      const from = this.sweepAt ?? p;
+      const n = Math.max(1, Math.ceil(Math.hypot(p[0] - from[0], p[2] - from[2]) / Math.max(0.5, tol / 2)));
+      for (let k = 1; k <= n; k++) {
+        const q: Vec3 = [from[0] + ((p[0] - from[0]) * k) / n, 0, from[2] + ((p[2] - from[2]) * k) / n];
+        const id = this.removable(q, tol);
+        if (id !== null && !this.sweep.includes(id)) this.sweep.push(id);
+      }
+      this.sweepAt = [p[0], 0, p[2]];
+      this.draft = markerDraft([], null);
+      this.draft.removing = this.sweep;
+      this.changed();
     } else if (this.tool === 'bend' && this.moveId >= 0) {
       const id = this.moveId;
       const to = snapFree(this.net, p, tol, this.net.node(id).pos, this.snapping);
@@ -431,6 +459,12 @@ export class Editor {
   }
 
   up(): void {
+    if (this.tool === 'delete') {
+      const ids = this.sweep;
+      this.cancel();
+      if (ids.length > 0) this.removeRoads(ids);
+      return;
+    }
     if (this.tool === 'road') {
       const grab = this.grab;
       this.grab = null;
@@ -464,6 +498,9 @@ export class Editor {
     this.chainDir = null;
     this.bendSeg = -1;
     this.moveId = -1;
+    this.sweeping = false;
+    this.sweep = [];
+    this.sweepAt = null;
     this.draft = null;
     this.changed();
   }
@@ -594,16 +631,38 @@ export class Editor {
       this.selection = pick;
       if (!pick) this.message = 'Tap a road or junction inside the zone';
     } else if (this.tool === 'delete') {
-      const pick = pickAt(net, p, tol, { node: () => false, segment: this.editable });
-      const ring = pick?.kind === 'segment' ? net.segment(pick.id).ring : undefined;
-      if (ring !== undefined) this.apply((n) => removeRing(n, ring));
-      else if (pick?.kind === 'segment') this.apply((n) => deleteRoad(n, pick.id));
-      else this.message = 'Tap a road inside the zone to remove it';
+      const id = this.removable(p, tol);
+      if (id !== null) this.removeRoads([id]);
+      else this.message = 'Tap a road inside the zone to remove it, or drag across several';
     }
     this.changed();
   }
 
   // ---------------------------------------------------------------- edits
+
+  /** The editable road under a point (Remove tool), or null. */
+  private removable(p: Vec3, tol: number): number | null {
+    const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
+    return pick?.kind === 'segment' ? pick.id : null;
+  }
+
+  /**
+   * Removes roads as one undoable step. A roundabout ring segment takes its whole ring with it;
+   * roads already gone (with a ring) are skipped.
+   */
+  private removeRoads(ids: number[]): void {
+    this.apply((n) => {
+      const rings = new Set<number>();
+      for (const id of ids) {
+        const ring = n.segments.get(id)?.ring;
+        if (ring !== undefined) rings.add(ring);
+      }
+      let touched: number[] = [];
+      for (const r of rings) if (n.roundabouts.has(r)) touched = touched.concat(removeRing(n, r).touched);
+      for (const id of ids) if (n.segments.has(id)) touched = touched.concat(deleteRoad(n, id).touched);
+      return { changed: [], touched: [...new Set(touched)].filter((t) => n.segments.has(t)), cost: 0 };
+    });
+  }
 
   private outside(a: Anchor): string | null {
     if (a.kind !== 'free') return null;
@@ -627,7 +686,7 @@ export class Editor {
       error = e.message;
     }
     const demo = error ? { items: [], cost: 0 } : this.host.demolition(candidate);
-    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null, lines: [] };
+    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null, lines: [], removing: [] };
   }
 
   /**

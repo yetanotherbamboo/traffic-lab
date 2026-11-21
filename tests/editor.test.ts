@@ -775,6 +775,43 @@ describe('saving and resetting the city', () => {
   });
 });
 
+describe('drag to remove', () => {
+  it('a drag starting on a road sweeps every road it crosses; lifting removes them in one undo step', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    for (const x of [30, 45, 60]) {
+      ed.down([x, 0, 30], 1.5); ed.move([x, 0, 70], 1.5); ed.up(); ed.confirm(); ed.discard();
+    }
+    const n0 = w.net.segments.size;
+    ed.setTool('delete');
+    expect(ed.down([20, 0, 50], 1.5)).toBe(false); // off a road: the view moves
+    expect(ed.down([30, 0, 50], 1.5)).toBe(true);
+    ed.move([62, 0, 51], 1.5); // one quick swipe across all three
+    expect(ed.draft!.removing.length).toBe(3);
+    expect(w.net.segments.size).toBe(n0); // nothing gone until the finger lifts
+    ed.up();
+    expect(w.net.segments.size).toBe(n0 - 3);
+    expect(ed.draft).toBeNull();
+    ed.undo();
+    expect(w.net.segments.size).toBe(n0);
+  });
+
+  it('a tap still removes one road; sweeping a roundabout removes its ring', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    const centre = [...w.net.nodes.values()].find((n) => n.pos[0] === 0 && n.pos[2] === 0)!;
+    expect(ed.apply((n) => convertToRoundabout(n, centre.id))).toBeNull();
+    const ringSeg = [...w.net.segments.values()].find((s) => s.ring !== undefined)!;
+    const p = ringSeg.curve.point(0.5);
+    ed.setTool('delete');
+    expect(ed.down(p, 1.5)).toBe(true);
+    ed.up();
+    expect([...w.net.segments.values()].some((s) => s.ring !== undefined)).toBe(false);
+    expect(w.net.roundabouts.size).toBe(0);
+  });
+});
+
 describe('moving junctions (Reshape tool)', () => {
   const make = () => {
     const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);

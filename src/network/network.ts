@@ -115,6 +115,8 @@ const MIN_TRIM_SMALL = 3;
 const ENTRANCE_FLARE = 1;
 /** Entrances: kerb room where the side road starts beyond the through road's edge (m). */
 const ENTRANCE_KERB = 0.5;
+/** Entrances need the side road to meet the through road at 70° or more (sharper corners fold the kerb). */
+const ENTRANCE_MIN_SIN = Math.sin((70 * Math.PI) / 180);
 
 /** Small roads (lanes, alleys) get compact junctions: at most one lane each way, narrow. */
 export function isSmall(p: LaneProfile): boolean {
@@ -328,6 +330,8 @@ export class RoadNetwork {
       if (m0.profile.laneWidth !== m1.profile.laneWidth || m0.profile.sidewalk !== m1.profile.sidewalk) continue;
       const ls = this.lanesAt(side, nodeId);
       if (ls.incoming > 1 || ls.outgoing > 1) continue;
+      const sd = this.leaveDir(side, nodeId), md = this.leaveDir(m0, nodeId);
+      if (Math.abs(sd[0] * md[2] - sd[2] * md[0]) < ENTRANCE_MIN_SIN - 1e-6) continue; // too sharp an angle
       return [m0.id, m1.id, side.id];
     }
     return null;
@@ -345,19 +349,27 @@ export class RoadNetwork {
   private entranceTrim(nodeId: number, segId: number, layout: [number, number, number]): number {
     const [m0, , sideId] = layout;
     const side = this.segments.get(sideId)!, main = this.segments.get(m0)!;
+    const sdir = this.leaveDir(side, nodeId), mdir = this.leaveDir(main, nodeId);
+    const sin = Math.max(ENTRANCE_MIN_SIN, Math.abs(sdir[0] * mdir[2] - sdir[2] * mdir[0]));
+    const sl = this.lanesAt(side, nodeId), sw = side.profile.sidewalk, w = side.profile.laneWidth;
+    // The through road's outer edge (lanes and sidewalk) on the side road's side.
+    const ml = this.lanesAt(main, nodeId);
+    const onRight = vec3.dot(rightOf(mdir), sdir) > 0;
+    const M = (onRight ? ml.outgoing : ml.incoming) * main.profile.laneWidth + main.profile.sidewalk;
     if (segId === sideId) {
-      // Half the through road's width (its carriageway and sidewalk) on the side road's side.
-      const dir = this.leaveDir(main, nodeId), sdir = this.leaveDir(side, nodeId);
-      const { incoming, outgoing } = this.lanesAt(main, nodeId);
-      const onRight = vec3.dot(rightOf(dir), sdir) > 0;
-      const lanes = onRight ? outgoing : incoming;
-      return lanes * main.profile.laneWidth + main.profile.sidewalk + ENTRANCE_KERB;
+      // The side road starts where both its edges have cleared the through road's edge.
+      const e = Math.max(sl.incoming, sl.outgoing) * w + sw;
+      const cos = Math.sqrt(1 - sin * sin);
+      return (M + e * cos) / sin + ENTRANCE_KERB;
     }
-    // The side road's carriageway towards this arm: its right side holds its outgoing lanes.
-    const { incoming, outgoing } = this.lanesAt(side, nodeId);
-    const towards = vec3.dot(rightOf(this.leaveDir(side, nodeId)), this.leaveDir(this.segments.get(segId)!, nodeId)) > 0;
-    const half = (towards ? outgoing : incoming) * side.profile.laneWidth;
-    return half + side.profile.sidewalk + ENTRANCE_FLARE;
+    // A through-road arm stops past where the side road's edge towards it crosses the far kerb line.
+    const adir = this.leaveDir(this.segments.get(segId)!, nodeId);
+    const towards = vec3.dot(rightOf(sdir), adir) > 0;
+    const e = (towards ? sl.outgoing : sl.incoming) * w + sw;
+    // Both corners: the side road leaning towards an arm pushes it back; leaning away, the kerb
+    // corner still needs the same room to curve round without folding.
+    const cot = Math.abs(vec3.dot(sdir, adir)) / sin;
+    return e / sin + M * cot + ENTRANCE_FLARE;
   }
 
   /** Untrimmed horizontal direction of a segment leaving the node. */

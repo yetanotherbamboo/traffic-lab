@@ -73,6 +73,26 @@ describe('buildRoadMesh', () => {
       }
       return net.junctionRadius(c);
     };
+    // One-way lanes on an avenue at many angles (the empty side of a lane has its kerb on the centreline).
+    for (const deg of [30, 45, 60, 75, 105, 120, 135, 150]) {
+      const h = (deg * Math.PI) / 180;
+      const AVENUE = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 };
+      for (const side of [LANE, { ...LANE, forward: 0, backward: 1 }]) {
+        const net = new RoadNetwork();
+        const c = net.addNode([0, 0, 0]);
+        net.addSegment(net.addNode([-50, 0, 0]), c, AVENUE);
+        net.addSegment(c, net.addNode([50, 0, 0]), AVENUE);
+        net.addSegment(c, net.addNode([Math.cos(h) * 40, 0, Math.sin(h) * 40]), side);
+        const mesh = buildRoadMesh(net);
+        const V = mesh.vertices, S = ROAD_STRIDE;
+        for (let t = 0; t < mesh.indices.length; t += 3) {
+          const [a, b, d] = [mesh.indices[t]!, mesh.indices[t + 1]!, mesh.indices[t + 2]!];
+          if (V[a * S + 4]! < 0.99) continue;
+          const e1 = [V[b * S]! - V[a * S]!, V[b * S + 2]! - V[a * S + 2]!], e2 = [V[d * S]! - V[a * S]!, V[d * S + 2]! - V[a * S + 2]!];
+          expect(e1[1]! * e2[0]! - e1[0]! * e2[1]!, `lane at ${deg}°`).toBeGreaterThanOrEqual(-1e-4);
+        }
+      }
+    }
     const T: [number, number][] = [[50, 0], [-50, 0], [0, 50]];
     const street = radius(STREET, T), lane = radius(LANE, T), alley = radius(ALLEY, T);
     expect(lane).toBeLessThan(street - 1);
@@ -87,29 +107,50 @@ describe('buildRoadMesh', () => {
   it('entrances face upwards and are smaller than a full junction', () => {
     const STREET = { forward: 1, backward: 1, laneWidth: 3.25, sidewalk: 2.5, speedLimit: 40 };
     const AVENUE = { forward: 2, backward: 2, laneWidth: 3.5, sidewalk: 2.5, speedLimit: 50 };
-    const sides = [
+    const sides: { forward: number; backward: number; laneWidth: number; sidewalk: number; speedLimit: number }[] = [
       { forward: 1, backward: 0, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 },
       { forward: 0, backward: 1, laneWidth: 3, sidewalk: 1.5, speedLimit: 30 },
       { forward: 1, backward: 1, laneWidth: 2.75, sidewalk: 1, speedLimit: 30 },
       STREET,
     ];
-    for (const main of [STREET, AVENUE]) for (const side of sides) for (const z of [40, -40]) {
+    for (const main of [STREET, AVENUE]) for (const side of sides) for (const deg of [70, 75, 80, 90, 100, 105, 110, -70, -90, -110]) {
       const net = new RoadNetwork();
       const c = net.addNode([0, 0, 0]);
       net.addSegment(net.addNode([-50, 0, 0]), c, main);
       net.addSegment(c, net.addNode([50, 0, 0]), main);
-      net.addSegment(c, net.addNode([0, 0, z]), side);
+      const h = (deg * Math.PI) / 180;
+      net.addSegment(c, net.addNode([Math.cos(h) * 40, 0, Math.sin(h) * 40]), side);
       const full = net.junctionRadius(c);
       net.node(c).entrance = true;
-      expect(net.isEntrance(c)).toBe(true);
-      expect(net.junctionRadius(c)).toBeLessThanOrEqual(full);
+      expect(net.isEntrance(c), `${deg}°`).toBe(true);
+      if (Math.abs(deg) === 90) expect(net.junctionRadius(c)).toBeLessThanOrEqual(full + 1e-6);
+      // No overlap: the side road starts clear of the through road (lanes and sidewalk), and the
+      // through road's arms stop clear of the side road.
+      const M = main.forward * main.laneWidth + main.sidewalk; // symmetric main roads here
+      for (const arm of net.arms(c)) {
+        const sideArm = arm.segment.profile === side;
+        for (const k of [1, -1]) {
+          const ext = (k > 0 ? arm.rightExt : arm.leftExt) + arm.segment.profile.sidewalk;
+          const p = [arm.end[0] + arm.right[0] * ext * k, arm.end[2] + arm.right[2] * ext * k];
+          if (sideArm) {
+            expect(Math.abs(p[1]!), `side corner clears the through road at ${deg}°`).toBeGreaterThanOrEqual(M - 1e-6);
+          } else if (Math.sign(p[1]!) === Math.sign(Math.sin(h))) {
+            // Distance from the side road's centreline must exceed its half width on that side.
+            // The side road leaves the node (it runs c → end): forward lanes on its right.
+            const r = -p[0]! * Math.sin(h) + p[1]! * Math.cos(h);
+            const along = p[0]! * Math.cos(h) + p[1]! * Math.sin(h);
+            const e = (r > 0 ? side.forward : side.backward) * side.laneWidth + side.sidewalk;
+            if (along > 0) expect(Math.abs(r), `through-road corner clears the side road at ${deg}°`).toBeGreaterThanOrEqual(e - 1e-6);
+          }
+        }
+      }
       const mesh = buildRoadMesh(net);
       const V = mesh.vertices, S = ROAD_STRIDE;
       for (let t = 0; t < mesh.indices.length; t += 3) {
         const [a, b, d] = [mesh.indices[t]!, mesh.indices[t + 1]!, mesh.indices[t + 2]!];
         if (V[a * S + 4]! < 0.99) continue;
         const e1 = [V[b * S]! - V[a * S]!, V[b * S + 2]! - V[a * S + 2]!], e2 = [V[d * S]! - V[a * S]!, V[d * S + 2]! - V[a * S + 2]!];
-        expect(e1[1]! * e2[0]! - e1[0]! * e2[1]!).toBeGreaterThanOrEqual(-1e-6);
+        expect(e1[1]! * e2[0]! - e1[0]! * e2[1]!).toBeGreaterThanOrEqual(-1e-4); // zero-area slivers allowed
       }
     }
   });

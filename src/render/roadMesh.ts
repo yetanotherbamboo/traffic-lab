@@ -120,8 +120,14 @@ function intersectXZ(p: Vec3, dp: Vec3, q: Vec3, dq: Vec3): [number, number] | n
   return [(rx * dq[2] - rz * dq[0]) / den, (rx * dp[2] - rz * dp[0]) / den];
 }
 
-/** Rounded kerb line from the right edge of arm `a` to the left edge of the next arm `c`. */
+/**
+ * Rounded kerb line from the right edge of arm `a` to the left edge of the next arm `c`. Sets
+ * `cornerRadius` to the fillet radius (Infinity for straight or wide corners): a corner sidewalk
+ * wider than that would fold over itself.
+ */
+let cornerRadius = Infinity;
 function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
+  cornerRadius = Infinity;
   const P = vec3.add(a.end, vec3.scale(a.right, a.rightExt));
   const Q = vec3.sub(c.end, vec3.scale(c.right, c.leftExt));
 
@@ -171,6 +177,7 @@ function cornerCurve(a: Arm, c: Arm, centre: Vec3, samples = 8): Vec3[] {
   if (a2 - a1 > Math.PI) a2 -= Math.PI * 2;
   if (a1 - a2 > Math.PI) a2 += Math.PI * 2;
   const r = Math.hypot(T1[0] - C[0], T1[2] - C[2]);
+  cornerRadius = r;
   const pts: Vec3[] = [];
   if (La > L + 0.01) pts.push(P);
   for (let k = 0; k <= samples; k++) {
@@ -212,9 +219,13 @@ function addJunction(b: Builder, net: RoadNetwork, nodeId: number): void {
   // Sidewalk corners: swept along the kerb curve; the sidewalk lies on the far side from the node.
   arms.forEach((a, i) => {
     const next = arms[(i + 1) % arms.length]!;
-    const S = Math.min(a.segment.profile.sidewalk, next.segment.profile.sidewalk);
-    if (S <= 0) return;
-    const pts = cornerCurve(a, next, centre);
+    // Near-duplicate points (where the kerb line meets the fillet) would give a strip with a
+    // reversed direction, flipping the sidewalk there.
+    const pts = cornerCurve(a, next, centre).filter((p, k, all) => k === 0 || Math.hypot(p[0] - all[k - 1]![0], p[2] - all[k - 1]![2]) > 0.1);
+    if (pts.length < 2) return;
+    // Tight corners get a narrower sidewalk so it can't fold over itself.
+    const S = Math.min(a.segment.profile.sidewalk, next.segment.profile.sidewalk, cornerRadius * 0.9);
+    if (S <= 0.05) return;
     const stations: Station[] = pts.map((p, k) => {
       const prev = pts[Math.max(0, k - 1)]!, nxt = pts[Math.min(pts.length - 1, k + 1)]!;
       return { p, right: rightOf(horizontal(vec3.sub(nxt, prev))), v: k };

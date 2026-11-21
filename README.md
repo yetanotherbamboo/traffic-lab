@@ -37,7 +37,7 @@ In the **Edit** panel of a junction you can choose:
 - **Signals**: traffic lights with phases; you set each phase's green time.
 - **Roundabout**: turns the junction into a roundabout with 1 to 3 lanes and a size you choose. Any road can join the ring anywhere.
 - **Turn lanes**: set which way each lane may go. Lanes limited to some directions get painted arrows; no arrow means any direction.
-- **Entrance**: a small road (one lane each way at most) joining a road that runs straight through can be an entrance, like a driveway: it takes much less room than a full junction, so small roads fit close to other junctions, and the through road always has right of way. Where a full junction doesn't fit, a small road joins as an entrance automatically; it then can't be widened to more lanes.
+- **Entrance**: a small road (one lane each way at most) joining a road that runs straight through, roughly at a right angle (70° or more), can be an entrance, like a driveway: it takes much less room than a full junction, so small roads fit close to other junctions, and the through road always has right of way. Where a full junction doesn't fit, a small road joins as an entrance automatically; it then can't be widened to more lanes.
 - **Non-stop lanes**: a lane that crosses and merges with no other traffic (for example the far side of a T-junction whose side road only turns right) can skip the lights or stop signs and drive straight through.
 
 ### Traffic

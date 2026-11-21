@@ -140,9 +140,11 @@ export class EditorUI {
       const ok = chip('✓ Build', false, () => ed.confirm(), 'go') as HTMLButtonElement;
       ok.disabled = !ed.canConfirm;
       out.push(stop(), text, ok);
-    } else if (ed.tool === 'delete' && d) {
-      const n = d.removing.length;
-      out.push(n === 0 ? 'Drag across the roads to remove' : h('span', {}, 'Lift to remove ', h('b', {}, `${n} ${n === 1 ? 'road' : 'roads'}`), ' · Undo brings them back'));
+    } else if (d?.sweepKind) {
+      const n = d.swept.length, roads = `${n} ${n === 1 ? 'road' : 'roads'}`;
+      out.push(n === 0 ? 'Drag across the roads'
+        : d.sweepKind === 'remove' ? h('span', {}, 'Lift to remove ', h('b', {}, roads), ' · Undo brings them back')
+        : h('span', {}, 'Lift to make ', h('b', {}, roads), ` ${ROAD_PRESETS[ed.preset]!.name}`));
     } else if (d?.candidate && ed.tool === 'bend') {
       out.push(...(d.error ? [h('span', { class: 'err' }, d.error)] : this.costLine(d)));
     } else if (ed.tool === 'road' && ed.pendingStart) {
@@ -152,7 +154,7 @@ export class EditorUI {
     } else if (ed.message) {
       out.push(h('span', { class: 'err' }, ed.message));
     } else if (ed.tool === 'road' && ed.drawMode === 'upgrade') {
-      out.push(`Tap roads to make them ${ROAD_PRESETS[ed.preset]!.name} · tap a one-way road again to reverse it`);
+      out.push(`Tap or drag across roads to make them ${ROAD_PRESETS[ed.preset]!.name} · tap a one-way road again to reverse it`);
     } else {
       out.push(HINTS[ed.tool]);
     }

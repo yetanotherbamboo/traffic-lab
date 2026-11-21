@@ -63,8 +63,9 @@ export interface Draft {
   guide: Guide | null;
   /** Guide lines the road's end (or moved start) snapped onto, drawn dashed. */
   lines: [Vec3, Vec3][];
-  /** Remove tool sweep: roads (live ids) that lifting the finger will remove. */
-  removing: number[];
+  /** A sweep in progress: roads (live ids) that lifting the finger will remove or upgrade. */
+  swept: number[];
+  sweepKind: 'remove' | 'upgrade' | null;
 }
 
 /** What the floating label next to a road in progress says, and where it is anchored. */
@@ -81,7 +82,7 @@ export interface Guide {
 
 /** A draft that only shows markers (no road yet). */
 function markerDraft(markers: Marker[], error: string | null): Draft {
-  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null, lines: [], removing: [] };
+  return { candidate: null, changed: [], touched: [], markers, error, cost: 0, demolish: [], demolishCost: 0, length: 0, grips: [], guide: null, lines: [], swept: [], sweepKind: null };
 }
 
 const HISTORY_LIMIT = 100;
@@ -129,6 +130,8 @@ export class Editor {
   private sweeping = false;
   private sweep: number[] = [];
   private sweepAt: Vec3 | null = null;
+  /** Where the sweep began: a sweep that never left it is a tap. */
+  private sweepFrom: Vec3 | null = null;
   private readonly past: unknown[] = [];
   private readonly future: unknown[] = [];
   /** Bumped on every change, so views know when to refresh. */
@@ -346,16 +349,18 @@ export class Editor {
   /** Finger/mouse down with a drag tool. Returns true if the editor takes the gesture. */
   down(p: Vec3, tol: number): boolean {
     this.message = null;
-    if (this.tool === 'road') return this.downRoad(p, tol);
-    if (this.tool === 'delete') {
-      // A drag that starts on a road sweeps roads away; one that starts elsewhere moves the view.
-      if (this.removable(p, tol) === null) return false;
+    if (this.tool === 'delete' || (this.tool === 'road' && this.drawMode === 'upgrade')) {
+      // A drag that starts on a road sweeps roads (to remove or upgrade them); one that starts
+      // elsewhere moves the view.
+      if (this.sweepable(p, tol) === null) return false;
       this.sweeping = true;
       this.sweep = [];
       this.sweepAt = null;
+      this.sweepFrom = [p[0], 0, p[2]];
       this.move(p, tol);
       return true;
     }
+    if (this.tool === 'road') return this.downRoad(p, tol);
     if (this.tool === 'bend') {
       const pick = pickAt(this.net, p, tol, { node: this.movable, segment: this.editable });
       if (pick?.kind === 'node') {
@@ -382,7 +387,6 @@ export class Editor {
    * with only a start, a drag from it pulls out the end; with nothing yet, place the start here.
    */
   private downRoad(p: Vec3, tol: number): boolean {
-    if (this.drawMode === 'upgrade') return false; // taps upgrade; drags move the view
     const near = (q: Vec3): number => Math.hypot(q[0] - p[0], q[2] - p[2]);
     if (this.start && this.end) {
       const grips: ['start' | 'end' | 'bend', Vec3][] = [['start', this.start.pos], ['end', this.end.pos]];
@@ -433,18 +437,19 @@ export class Editor {
         this.bend = bendFrom(this.start.pos, this.end.pos, [p[0], 0, p[2]]);
       }
       this.refresh();
-    } else if (this.tool === 'delete' && this.sweeping) {
+    } else if (this.sweeping) {
       // Check points along the finger's path, so a quick swipe doesn't skip a road.
       const from = this.sweepAt ?? p;
       const n = Math.max(1, Math.ceil(Math.hypot(p[0] - from[0], p[2] - from[2]) / Math.max(0.5, tol / 2)));
       for (let k = 1; k <= n; k++) {
         const q: Vec3 = [from[0] + ((p[0] - from[0]) * k) / n, 0, from[2] + ((p[2] - from[2]) * k) / n];
-        const id = this.removable(q, tol);
+        const id = this.sweepable(q, tol);
         if (id !== null && !this.sweep.includes(id)) this.sweep.push(id);
       }
       this.sweepAt = [p[0], 0, p[2]];
       this.draft = markerDraft([], null);
-      this.draft.removing = this.sweep;
+      this.draft.swept = this.sweep;
+      this.draft.sweepKind = this.tool === 'delete' ? 'remove' : 'upgrade';
       this.changed();
     } else if (this.tool === 'bend' && this.moveId >= 0) {
       const id = this.moveId;
@@ -459,10 +464,17 @@ export class Editor {
   }
 
   up(): void {
-    if (this.tool === 'delete') {
-      const ids = this.sweep;
+    if (this.sweeping) {
+      const ids = this.sweep, from = this.sweepFrom, at = this.sweepAt;
+      const tapped = !!from && !!at && Math.hypot(at[0] - from[0], at[2] - from[2]) < 1;
       this.cancel();
-      if (ids.length > 0) this.removeRoads(ids);
+      if (this.tool === 'delete') {
+        if (ids.length > 0) this.removeRoads(ids);
+      } else if (tapped && ids.length === 1) {
+        this.upgradeOne(ids[0]!); // a tap: may also turn a one-way road round
+      } else if (ids.length > 0) {
+        this.upgradeRoads(ids);
+      }
       return;
     }
     if (this.tool === 'road') {
@@ -501,6 +513,7 @@ export class Editor {
     this.sweeping = false;
     this.sweep = [];
     this.sweepAt = null;
+    this.sweepFrom = null;
     this.draft = null;
     this.changed();
   }
@@ -519,7 +532,51 @@ export class Editor {
       this.changed();
       return;
     }
-    this.apply((n) => upgradeRoad(n, pick.id, ROAD_PRESETS[this.preset]!.profile));
+    this.upgradeOne(pick.id);
+  }
+
+  private upgradeOne(id: number): void {
+    this.apply((n) => upgradeRoad(n, id, ROAD_PRESETS[this.preset]!.profile));
+  }
+
+  /**
+   * Swept roads take the chosen type as one undoable step. Roads that already are this type are
+   * left alone (a sweep doesn't turn one-ways round), as are those that can't change; the
+   * message says how many were skipped and why.
+   */
+  private upgradeRoads(ids: number[]): void {
+    const profile = ROAD_PRESETS[this.preset]!.profile;
+    let skipped = 0, reason = '';
+    const err = this.apply((n) => {
+      let changed: number[] = [], touched: number[] = [], cost = 0;
+      for (const id of ids) {
+        const seg = n.segments.get(id);
+        if (!seg) continue;
+        const p = seg.profile;
+        const back = p.forward === 0 && p.backward > 0;
+        const same = (back ? p.backward === profile.forward && p.forward === profile.backward : p.forward === profile.forward && p.backward === profile.backward)
+          && p.laneWidth === profile.laneWidth && p.sidewalk === profile.sidewalk && (p.speedLimit ?? 50) === (profile.speedLimit ?? 50);
+        if (same) continue;
+        const before = JSON.stringify(seg.profile);
+        try {
+          const r = upgradeRoad(n, id, profile);
+          changed = changed.concat(r.changed);
+          touched = touched.concat(r.touched);
+          cost += r.cost;
+        } catch (e) {
+          if (!(e instanceof EditError)) throw e;
+          seg.profile = JSON.parse(before); // undo this road's change and skip it
+          skipped++;
+          reason = e.message;
+        }
+      }
+      if (changed.length === 0) throw new EditError(reason || 'These roads already are that type');
+      return { changed, touched: [...new Set(touched)], cost };
+    });
+    if (err === null && skipped > 0) {
+      this.message = `${skipped} ${skipped === 1 ? 'road' : 'roads'} skipped: ${reason}`;
+      this.changed();
+    }
   }
 
   /** Mouse hover (desktop): show where a road would snap, or rubber-band from a placed start. */
@@ -631,7 +688,7 @@ export class Editor {
       this.selection = pick;
       if (!pick) this.message = 'Tap a road or junction inside the zone';
     } else if (this.tool === 'delete') {
-      const id = this.removable(p, tol);
+      const id = this.sweepable(p, tol);
       if (id !== null) this.removeRoads([id]);
       else this.message = 'Tap a road inside the zone to remove it, or drag across several';
     }
@@ -640,9 +697,10 @@ export class Editor {
 
   // ---------------------------------------------------------------- edits
 
-  /** The editable road under a point (Remove tool), or null. */
-  private removable(p: Vec3, tol: number): number | null {
-    const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
+  /** The road under a point a sweep can take (editable; Upgrade also skips roundabout rings), or null. */
+  private sweepable(p: Vec3, tol: number): number | null {
+    const net = this.net, upgrade = this.tool === 'road';
+    const pick = pickAt(net, p, tol, { node: () => false, segment: (id) => this.editable(id) && !(upgrade && net.segment(id).ring !== undefined) });
     return pick?.kind === 'segment' ? pick.id : null;
   }
 
@@ -686,7 +744,7 @@ export class Editor {
       error = e.message;
     }
     const demo = error ? { items: [], cost: 0 } : this.host.demolition(candidate);
-    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null, lines: [], removing: [] };
+    return { candidate, changed, touched, markers, error, cost, demolish: demo.items, demolishCost: demo.cost, length: 0, grips: [], guide: null, lines: [], swept: [], sweepKind: null };
   }
 
   /**

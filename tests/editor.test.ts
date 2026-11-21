@@ -788,7 +788,8 @@ describe('drag to remove', () => {
     expect(ed.down([20, 0, 50], 1.5)).toBe(false); // off a road: the view moves
     expect(ed.down([30, 0, 50], 1.5)).toBe(true);
     ed.move([62, 0, 51], 1.5); // one quick swipe across all three
-    expect(ed.draft!.removing.length).toBe(3);
+    expect(ed.draft!.swept.length).toBe(3);
+    expect(ed.draft!.sweepKind).toBe('remove');
     expect(w.net.segments.size).toBe(n0); // nothing gone until the finger lifts
     ed.up();
     expect(w.net.segments.size).toBe(n0 - 3);
@@ -809,6 +810,40 @@ describe('drag to remove', () => {
     ed.up();
     expect([...w.net.segments.values()].some((s) => s.ring !== undefined)).toBe(false);
     expect(w.net.roundabouts.size).toBe(0);
+  });
+});
+
+describe('drag to upgrade', () => {
+  it('a sweep in Upgrade mode changes every road it crosses in one undo step; taps still reverse one-ways', () => {
+    const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+    const ed = new Editor(w);
+    ed.setTool('road');
+    for (const x of [20, 50, 80]) {
+      ed.down([x, 0, 30], 1.5); ed.move([x, 0, 70], 1.5); ed.up(); ed.confirm(); ed.discard();
+    }
+    const ids = [20, 50, 80].map((x) => [...w.net.segments.values()].find((s) => Math.hypot(s.curve.point(0.5)[0] - x, s.curve.point(0.5)[2] - 50) < 1)!.id);
+    ed.setDrawMode('upgrade');
+    ed.setPreset(1); // avenue
+    expect(ed.down([35, 0, 50], 1.5)).toBe(false); // off a road: the view moves
+    expect(ed.down([20, 0, 50], 1.5)).toBe(true);
+    ed.move([82, 0, 51], 1.5);
+    expect(ed.draft!.swept.length).toBe(3);
+    expect(ed.draft!.sweepKind).toBe('upgrade');
+    expect(w.net.segment(ids[0]!).profile.forward).toBe(1); // nothing changes until the finger lifts
+    ed.up();
+    for (const id of ids) expect([w.net.segment(id).profile.forward, w.net.segment(id).profile.backward]).toEqual([2, 2]);
+    ed.undo();
+    for (const id of ids) expect(w.net.segment(id).profile.forward).toBe(1);
+    // One-ways: a sweep over roads already that type leaves them alone; a tap turns one round.
+    ed.setPreset(2);
+    ed.down([20, 0, 50], 1.5); ed.move([82, 0, 51], 1.5); ed.up();
+    const dir = (id: number) => w.net.segment(id).profile.forward > 0;
+    const before = ids.map(dir);
+    ed.down([20, 0, 50], 1.5); ed.move([82, 0, 51], 1.5); ed.up();
+    expect(ids.map(dir)).toEqual(before);
+    expect(ed.message).toBe('These roads already are that type');
+    ed.down([50, 0, 50], 1.5); ed.up(); // a tap
+    expect(dir(ids[1]!)).toBe(!before[1]);
   });
 });
 
@@ -891,7 +926,7 @@ describe('Upgrade mode', () => {
     const seg = segAt(w, 30, 50);
     const { a, b } = seg, len = seg.curve.length, spent = w.spent;
     ed.setDrawMode('upgrade');
-    expect(ed.down([30, 0, 50], 1.5)).toBe(false); // drags move the view
+    expect(ed.down([40, 0, 50], 1.5)).toBe(false); // drags off a road move the view
     ed.setPreset(1); // avenue
     tapAt(ed, [30, 0, 50]);
     expect(ed.message).toBeNull();

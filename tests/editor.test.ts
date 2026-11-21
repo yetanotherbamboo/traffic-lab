@@ -39,14 +39,14 @@ function healthy(sim: TrafficSim): boolean {
 describe('zone split', () => {
   it('cuts roads at the construction-zone border into editable and fixed parts', () => {
     const net = zoned();
-    expect(net.segments.size).toBe(buildTestNetwork().segments.size + 4); // the 4 roads out of the centre
+    expect(net.segments.size).toBe(buildTestNetwork().segments.size + 6); // the 6 roads leaving the scene
     for (const seg of net.segments.values()) {
       const m = seg.curve.point(0.5);
       expect(segmentEditable(net, zone, seg)).toBe(zoneDistance(zone, m[0], m[2]) < 0);
     }
     // Boundary nodes join identical roads in a straight line: no junction surface, no seam.
     const boundary = [...net.nodes.values()].filter((n) => Math.abs(zoneDistance(zone, n.pos[0], n.pos[2])) < BOUNDARY_TOL);
-    expect(boundary.length).toBe(4);
+    expect(boundary.length).toBe(6);
     for (const n of boundary) expect(net.isJunction(n.id)).toBe(false);
   });
 
@@ -122,7 +122,7 @@ describe('edit operations', () => {
     };
     expect(check((n) => addRoad(n, free(-50, -50), free(-47, -50), STREET))).toMatch(/short/);
     expect(check((n) => addRoad(n, free(-50, -50), free(60, -50), STREET))).toBeNull();
-    expect(check((n) => addRoad(n, free(30, -30), free(60, -100), STREET))).toMatch(/zone/);
+    expect(check((n) => addRoad(n, free(130, 40), free(170, 45), STREET))).toMatch(/zone/);
     // Parallel to the arterial, 6 m off its centreline: overlaps it.
     expect(check((n) => addRoad(n, free(-50, 6), free(-20, 6), STREET))).toMatch(/Overlaps/);
     // Very sharp angle next to the central east-west arterial.
@@ -427,8 +427,10 @@ describe('starting a road near a junction', () => {
 
 describe('starting a road near the construction-zone border', () => {
   it('the cut at the border is no junction: roads start next to it (or on it)', () => {
+    // A border 70 m from the centre, well clear of the ring street's junctions.
+    const small = { ...TEST_ZONE, hx: 70, hz: 70, radius: 14, contextScale: 2 };
     for (let x = 52; x <= 69; x += 1) {
-      const w = new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+      const w = new World(buildTestNetwork(), small, TEST_SEED, testSpawners);
       const ed = new Editor(w);
       ed.setTool('road');
       ed.hoverAt([x, 0, 0], 1.5);
@@ -439,7 +441,7 @@ describe('starting a road near the construction-zone border', () => {
       expect(ed.draft?.error ?? null, `x=${x}`).toBeNull();
       ed.up();
       expect(w.net.segments.size, `x=${x}: built`).toBeGreaterThan(before);
-      expect(validate(w.net, TEST_ZONE, [...w.net.segments.keys()].filter((id) => segmentEditable(w.net, TEST_ZONE, w.net.segment(id))))).toBeNull();
+      expect(validate(w.net, small, [...w.net.segments.keys()].filter((id) => segmentEditable(w.net, small, w.net.segment(id))))).toBeNull();
     }
   });
 });

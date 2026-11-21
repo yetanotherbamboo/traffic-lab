@@ -18,8 +18,8 @@ export function testSpawners(net: RoadNetwork): Spawner[] {
   return out;
 }
 
-/** Buildable area around the central crossroad; the visible city is twice as large. */
-export const TEST_ZONE: Zone = { cx: 0, cz: 0, hx: 70, hz: 70, radius: 14, contextScale: 2 };
+/** Buildable area (280 m square) around the central crossroad; the visible city extends 1.6 times as far. */
+export const TEST_ZONE: Zone = { cx: 0, cz: 0, hx: 140, hz: 140, radius: 20, contextScale: 1.6 };
 export const TEST_SEED = 20261119;
 
 /**
@@ -52,7 +52,7 @@ export function buildTestNetwork(): RoadNetwork {
   net.addSegment(sw, w, LOCAL);
 
   // Roads continuing out of the scene so the city reads as part of something bigger.
-  const out = 200;
+  const out = 320;
   net.addSegment(w, net.addNode([-out, 0, 0]), ARTERIAL);
   net.addSegment(e, net.addNode([out, 0, 0]), ARTERIAL);
   net.addSegment(n, net.addNode([0, 0, -out]), LOCAL);

@@ -31,7 +31,7 @@ if (!gl) {
 const zone = TEST_ZONE;
 const camera = new OrbitCamera();
 camera.bounds = zone.hx * zone.contextScale;
-camera.maxDistance = 450;
+camera.maxDistance = 700;
 const controls = new CameraController(canvas, camera);
 
 const t0 = performance.now();
@@ -42,7 +42,7 @@ const genMs = performance.now() - t0;
 // The player's city (roads, demolished buildings, money spent) lives in this browser's storage,
 // saved after every change. Bump the key when the starting city changes, so old saves don't
 // replace the new one. Storage can be missing (private windows): the game then just doesn't save.
-const SAVE_KEY = 'traffic-lab:city:v1';
+const SAVE_KEY = 'traffic-lab:city:v2';
 const startCity = world.snapshot();
 const startJson = JSON.stringify(startCity);
 try {

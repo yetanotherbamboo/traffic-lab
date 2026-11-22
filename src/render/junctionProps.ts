@@ -8,7 +8,6 @@ import { GLOW_STRIDE } from './lights';
 import { MAT_PAINT, MAT_PAINT_YELLOW, type MeshData, ROAD_STRIDE } from './roadMesh';
 
 
-const PAINT: Vec3 = [0.93, 0.92, 0.88];
 const POLE: Vec3 = [0.3, 0.32, 0.36];
 const STOP_SIGN: Vec3 = [0.84, 0.27, 0.24];
 const LAMP: Record<number, Vec3> = { 0: [0.35, 0.92, 0.55], 1: [1.0, 0.76, 0.3], 2: [0.98, 0.32, 0.28] };
@@ -31,7 +30,6 @@ const BRANCH_HEAD_HALF = 0.34;
 /** Painted shapes lie flat just above the asphalt (which is lifted 0.03 m). */
 const PAINT_Y = 0.04;
 const scratch = new Float32Array(4);
-const ROAD_Y = 0.03;
 
 /** Height of the lit lamp's box above the signal head's base (red top, green bottom). */
 const lampHeight = (st: number): number => (st === SIGNAL_RED ? 0.82 : st === SIGNAL_GREEN ? 0.12 : 0.47);
@@ -174,15 +172,17 @@ export class JunctionProps {
           const l = graph.lanes[id]!;
           if (junctions.free[id]) continue;
           const end = l.path.point(l.path.count - 1), dir = l.path.dirAt(true), r = rightOf(dir);
-          const h = Math.atan2(-dir[2], dir[0]);
-          const c: Vec3 = [end[0] - dir[0] * 0.5, ROAD_Y, end[2] - dir[2] * 0.5];
+          if (Math.hypot(dir[0], dir[2]) < 0.5) continue; // lane squeezed to nothing between junctions: no room
+          const c: Vec3 = [end[0] - dir[0] * 0.5, PAINT_Y, end[2] - dir[2] * 0.5];
+          // Flat road paint (like the lane lines): a rectangle `along` long and `across` wide at u.
+          const mark = (u: number, along: number, across: number): void => {
+            const at = (f: number, s: number): Vec3 => [c[0] + dir[0] * f + r[0] * (u + s), PAINT_Y, c[2] + dir[2] * f + r[2] * (u + s)];
+            paint.quad(at(-along / 2, -across / 2), at(along / 2, -across / 2), at(along / 2, across / 2), at(-along / 2, across / 2));
+          };
           if (!minor) {
-            box(c, h, [0.4, 0.02, l.width - 0.4], PAINT);
+            mark(0, 0.4, l.width - 0.4); // stop line
           } else {
-            for (let k = 0; k < 4; k++) {
-              const u = ((k + 0.5) / 4 - 0.5) * (l.width - 0.4);
-              box([c[0] + r[0] * u, ROAD_Y, c[2] + r[2] * u], h, [0.35, 0.02, 0.45], PAINT);
-            }
+            for (let k = 0; k < 4; k++) mark(((k + 0.5) / 4 - 0.5) * (l.width - 0.4), 0.35, 0.45); // give-way dashes
           }
         }
         // Turn arrows on approach lanes of a real junction (3+ roads), but only where the lane is

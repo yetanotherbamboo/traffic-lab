@@ -4,7 +4,7 @@ import { setControl, setFreeFlow, setTurns } from '../src/editor/ops';
 import { lotsOverlap } from '../src/env/city';
 import { type JunctionControl, type LaneProfile, RoadNetwork, TURN_RIGHT, TURN_STRAIGHT } from '../src/network/network';
 import { JunctionProps } from '../src/render/junctionProps';
-import { MAT_PAINT_YELLOW, ROAD_STRIDE } from '../src/render/roadMesh';
+import { MAT_PAINT, MAT_PAINT_YELLOW, ROAD_STRIDE } from '../src/render/roadMesh';
 import { LaneGraph } from '../src/sim/laneGraph';
 import { TrafficSim } from '../src/sim/traffic';
 
@@ -223,5 +223,33 @@ describe('non-stop lanes', () => {
     expect(stripes(both)).toEqual(EDGES);
     const keys = both.map((tri) => tri.map((q) => `${q[0].toFixed(2)},${q[2].toFixed(2)}`).sort().join(' '));
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('stop and give-way lines are flat road paint, like the lane lines', () => {
+    /** Area (m²) of white road paint near the junction, and paint-coloured boxes left in the props. */
+    const marks = (net: RoadNetwork) => {
+      const p = new JunctionProps(new TrafficSim(new LaneGraph(net), [], 1));
+      const V = p.paint.vertices, I = p.paint.indices, S = ROAD_STRIDE;
+      let area = 0;
+      for (let t = 0; t < I.length; t += 3) {
+        const [a, b, c] = [I[t]!, I[t + 1]!, I[t + 2]!];
+        if (Math.round(V[a * S + 11]!) !== MAT_PAINT || Math.hypot(V[a * S]!, V[a * S + 2]!) > 15) continue;
+        area += Math.abs((V[b * S]! - V[a * S]!) * (V[c * S + 2]! - V[a * S + 2]!) - (V[c * S]! - V[a * S]!) * (V[b * S + 2]! - V[a * S + 2]!)) / 2;
+      }
+      let boxes = 0;
+      const n = p.update();
+      for (let i = 0; i < n; i++) if (Math.abs(p.buffer[i * 11 + 7]! - 0.93) < 1e-3 && Math.abs(p.buffer[i * 11 + 8]! - 0.92) < 1e-3) boxes++;
+      return { area, boxes };
+    };
+    const t = tee(STREET, STREET);
+    // Priority: the side road gives way with four 0.35 × 0.45 m dashes.
+    const giveWay = marks(t.net);
+    expect(giveWay.area).toBeCloseTo(4 * 0.35 * 0.45, 3);
+    expect(giveWay.boxes).toBe(0);
+    // All-way stop: a 0.4 m stop line across each of the three approaching lanes.
+    setControl(t.net, t.centre, 'allway');
+    const stop = marks(t.net);
+    expect(stop.area).toBeCloseTo(3 * 0.4 * (STREET.laneWidth - 0.4), 3);
+    expect(stop.boxes).toBe(0);
   });
 });

@@ -343,9 +343,9 @@ describe('turn arrows', () => {
     expect(props.arrowLanes).toBe(limited.filter((l) => l.path.length >= 5.5).length);
     expect(limited.some((l) => l.path.length >= 5.5 && l.path.length < 14)).toBe(true); // close junctions covered
 
-    // Arrows are flat painted shapes (road vertex layout): every triangle faces up, every corner
-    // lies well inside an approach lane (also on curved approaches), and each arrow lane has its
-    // stem on the lane's centre line.
+    // Arrows (and stop / give-way lines) are flat painted shapes (road vertex layout): every
+    // triangle faces up, every corner lies inside an approach lane (also on curved approaches), and
+    // each arrow lane has its stem on the lane's centre line.
     const { vertices: V, indices: I } = props.paint;
     expect(I.length).toBeGreaterThan(0);
     const pt = (k: number): Vec3 => [V[k * ROAD_STRIDE]!, V[k * ROAD_STRIDE + 1]!, V[k * ROAD_STRIDE + 2]!];
@@ -356,7 +356,7 @@ describe('turn arrows', () => {
     const n = V.length / ROAD_STRIDE;
     for (let k = 0; k < n; k++) {
       const p = pt(k);
-      expect(Math.min(...approaches.map((l) => l.path.project(p[0], p[2]).dist))).toBeLessThan(1.2);
+      expect(Math.min(...approaches.map((l) => l.path.project(p[0], p[2]).dist - l.width / 2))).toBeLessThan(0);
     }
     const arrowed = limited.filter((l) => l.path.length >= 5.5);
     for (const l of arrowed) {

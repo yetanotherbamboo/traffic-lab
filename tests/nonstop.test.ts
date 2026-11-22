@@ -4,6 +4,7 @@ import { setControl, setFreeFlow, setTurns } from '../src/editor/ops';
 import { lotsOverlap } from '../src/env/city';
 import { type JunctionControl, type LaneProfile, RoadNetwork, TURN_RIGHT, TURN_STRAIGHT } from '../src/network/network';
 import { JunctionProps } from '../src/render/junctionProps';
+import { MAT_PAINT_YELLOW, ROAD_STRIDE } from '../src/render/roadMesh';
 import { LaneGraph } from '../src/sim/laneGraph';
 import { TrafficSim } from '../src/sim/traffic';
 
@@ -189,21 +190,21 @@ describe('non-stop lanes', () => {
   });
 
   it('paints the lane through the junction instead of a stop line, with a double centre line', () => {
-    /** Yellow paint pieces near the junction (centres, x z). */
-    const yellow = (net: RoadNetwork): Vec3[] => {
+    /** Yellow paint triangles near the junction, drawn as road paint (same look as the road's centre line). */
+    const yellow = (net: RoadNetwork): Vec3[][] => {
       const p = new JunctionProps(new TrafficSim(new LaneGraph(net), [], 1));
-      const n = p.update();
-      const out: Vec3[] = [];
-      for (let i = 0; i < n; i++) {
-        const o = i * 11;
-        const at: Vec3 = [p.buffer[o]!, 0, p.buffer[o + 2]!];
-        const paint = Math.abs(p.buffer[o + 7]! - 0.95) + Math.abs(p.buffer[o + 8]! - 0.78) + Math.abs(p.buffer[o + 9]! - 0.35) < 1e-3;
-        if (paint && Math.hypot(at[0], at[2]) < 15) out.push(at);
+      const V = p.paint.vertices, I = p.paint.indices, S = ROAD_STRIDE;
+      const out: Vec3[][] = [];
+      for (let t = 0; t < I.length; t += 3) {
+        const tri = [I[t]!, I[t + 1]!, I[t + 2]!].map((i): Vec3 => [V[i * S]!, V[i * S + 1]!, V[i * S + 2]!]);
+        if (Math.round(V[I[t]! * S + 11]!) !== MAT_PAINT_YELLOW) continue;
+        if (tri.every((q) => Math.hypot(q[0], q[2]) < 15)) out.push(tri);
       }
       return out;
     };
-    /** Distinct sideways offsets (z, the main road runs along x) of the yellow stripes. */
-    const stripes = (pts: Vec3[]): number[] => [...new Set(pts.map((q) => Math.round(q[2] * 100) / 100))].sort((a, b) => a - b);
+    /** Distinct sideways positions (z, the main road runs along x) of the yellow stripes' edges. */
+    const stripes = (tris: Vec3[][]): number[] => [...new Set(tris.flat().map((q) => Math.round(q[2] * 100) / 100))].sort((a, b) => a - b);
+    const EDGES = [-0.2, -0.08, 0.08, 0.2]; // two 0.12 m stripes at ±0.14, as the road shader paints them
 
     const t = rightInTee();
     setControl(t.net, t.centre, 'signal');
@@ -212,15 +213,15 @@ describe('non-stop lanes', () => {
     setFreeFlow(t.net, t.centre, true);
     const one = yellow(t.net);
     expect(one.length).toBeGreaterThan(5);
-    expect(stripes(one)).toEqual([-0.14, 0.14]);
+    expect(stripes(one)).toEqual(EDGES);
 
     // Both directions non-stop: still one double line, with no stripe painted twice.
     const b = tee(STREET, ONE_WAY_OUT);
     setTurns(b.net, b.eastSeg, b.centre, 0, TURN_STRAIGHT);
     setFreeFlow(b.net, b.centre, true);
     const both = yellow(b.net);
-    expect(stripes(both)).toEqual([-0.14, 0.14]);
-    const keys = both.map((q) => `${q[0].toFixed(2)},${q[2].toFixed(2)}`);
+    expect(stripes(both)).toEqual(EDGES);
+    const keys = both.map((tri) => tri.map((q) => `${q[0].toFixed(2)},${q[2].toFixed(2)}`).sort().join(' '));
     expect(new Set(keys).size).toBe(keys.length);
   });
 });

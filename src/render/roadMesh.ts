@@ -6,7 +6,8 @@ export const ROAD_STRIDE = 12;
 export const MAT_ROAD = 0; // asphalt with lane markings
 export const MAT_SIDEWALK = 1;
 export const MAT_ASPHALT = 2; // plain asphalt (junction surfaces)
-export const MAT_PAINT = 3; // road paint shapes (lane arrows)
+export const MAT_PAINT = 3; // road paint shapes (lane arrows, lines through junctions)
+export const MAT_PAINT_YELLOW = 4; // yellow road paint (centre lines through junctions)
 
 const LIFT = 0.03; // keeps asphalt above the ground plane (no z-fighting)
 const KERB = 0.15; // sidewalk height

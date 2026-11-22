@@ -5,13 +5,12 @@ import { type JunctionModel, SIGNAL_GREEN, SIGNAL_RED, type SignalController } f
 import { type Lane, type LaneGraph, TURN_BIT } from '../sim/laneGraph';
 import type { TrafficSim } from '../sim/traffic';
 import { GLOW_STRIDE } from './lights';
-import { MAT_PAINT, type MeshData, ROAD_STRIDE } from './roadMesh';
+import { MAT_PAINT, MAT_PAINT_YELLOW, type MeshData, ROAD_STRIDE } from './roadMesh';
 
 
 const PAINT: Vec3 = [0.93, 0.92, 0.88];
 const POLE: Vec3 = [0.3, 0.32, 0.36];
 const STOP_SIGN: Vec3 = [0.84, 0.27, 0.24];
-const CENTRE_PAINT: Vec3 = [0.95, 0.78, 0.35];
 const LAMP: Record<number, Vec3> = { 0: [0.35, 0.92, 0.55], 1: [1.0, 0.76, 0.3], 2: [0.98, 0.32, 0.28] };
 const SIDEWALK_Y = 0.18;
 /** Turn arrows start this far (m) before the stop line, or nearer on short approaches. */
@@ -57,22 +56,22 @@ class PaintBuilder {
   readonly v: number[] = [];
   readonly i: number[] = [];
 
-  private vertex(p: Vec3): number {
-    this.v.push(p[0], p[1], p[2], 0, 1, 0, 0, 0, 0, 0, 0, MAT_PAINT);
+  private vertex(p: Vec3, mat: number): number {
+    this.v.push(p[0], p[1], p[2], 0, 1, 0, 0, 0, 0, 0, 0, mat);
     return this.v.length / ROAD_STRIDE - 1;
   }
 
   /** One triangle, wound to face up whatever order the corners come in. */
-  tri(a: Vec3, b: Vec3, c: Vec3): void {
+  tri(a: Vec3, b: Vec3, c: Vec3, mat = MAT_PAINT): void {
     const up = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]); // y of (b-a)×(c-a)
-    const [ia, ib, ic] = [this.vertex(a), this.vertex(b), this.vertex(c)];
+    const [ia, ib, ic] = [this.vertex(a, mat), this.vertex(b, mat), this.vertex(c, mat)];
     if (up >= 0) this.i.push(ia, ib, ic);
     else this.i.push(ia, ic, ib);
   }
 
-  quad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
-    this.tri(a, b, c);
-    this.tri(a, c, d);
+  quad(a: Vec3, b: Vec3, c: Vec3, d: Vec3, mat = MAT_PAINT): void {
+    this.tri(a, b, c, mat);
+    this.tri(a, c, d, mat);
   }
 
   build(): MeshData {
@@ -210,7 +209,7 @@ export class JunctionProps {
             arrowShape(at, turns, paint);
           }
         }
-        for (const id of laneIds) if (junctions.free[id]) this.nonStopLines(graph, junctions, id, box);
+        for (const id of laneIds) if (junctions.free[id]) this.nonStopLines(graph, junctions, id, paint);
         const stopping = laneIds.filter((id) => !junctions.free[id]);
         if (!lines || minor || stopping.length === 0) continue;
 
@@ -244,8 +243,7 @@ export class JunctionProps {
    * dashed divider next to another non-stop lane, and the road's edge line on a side no movement
    * of the lane turns off to.
    */
-  private nonStopLines(graph: LaneGraph, junctions: JunctionModel, id: number,
-    box: (p: Vec3, heading: number, scale: Vec3, color: Vec3) => void): void {
+  private nonStopLines(graph: LaneGraph, junctions: JunctionModel, id: number, paint: PaintBuilder): void {
     const l = graph.lanes[id]!;
     const conns = l.next.map((c) => graph.lanes[c]!);
     const C = mainPath(graph, l);
@@ -259,20 +257,20 @@ export class JunctionProps {
       const n = group.find((g) => graph.lanes[g]!.index === k);
       return n !== undefined && junctions.free[n] === 1;
     };
-    const line = (u: number, w: number, color: Vec3, dashed: boolean): void => {
+    // Flat paint in the road shader's paint materials, so these lines look exactly like the
+    // road's own markings they continue (same colours, blend and lighting).
+    const line = (u: number, w: number, mat: number, dashed: boolean): void => {
       const path = C.path, len = path.length;
       const n = Math.max(1, Math.ceil(len / 1.5));
-      let prev: Vec3 | null = null;
+      let prev: [Vec3, Vec3] | null = null;
       for (let k = 0; k <= n; k++) {
         const s = (len * k) / n;
         path.sample(s, scratch);
-        const h = scratch[3]!;
-        const p: Vec3 = [scratch[0]! + Math.sin(h) * u, ROAD_Y, scratch[2]! + Math.cos(h) * u];
-        if (prev && (!dashed || ((s - len / (2 * n)) / 9) % 1 < 0.34)) {
-          const dx = p[0] - prev[0], dz = p[2] - prev[2];
-          box([(p[0] + prev[0]) / 2, ROAD_Y, (p[2] + prev[2]) / 2], Math.atan2(-dz, dx), [Math.hypot(dx, dz) + 0.02, 0.02, w], color);
-        }
-        prev = p;
+        const h = scratch[3]!, sx = Math.sin(h), cz = Math.cos(h); // (sx, cz): sideways, to the right
+        const at = (o: number): Vec3 => [scratch[0]! + sx * o, PAINT_Y, scratch[2]! + cz * o];
+        const edge: [Vec3, Vec3] = [at(u - w / 2), at(u + w / 2)];
+        if (prev && (!dashed || ((s - len / (2 * n)) / 9) % 1 < 0.34)) paint.quad(prev[0], prev[1], edge[1], edge[0], mat);
+        prev = edge;
       }
     };
     // Left side.
@@ -281,21 +279,21 @@ export class JunctionProps {
         // Nothing crosses a non-stop lane, so the centre line beside it is a full double line.
         // Its far half belongs to the oncoming lane alongside: drawn here unless that lane is
         // non-stop too and draws its own (both halves would land on the same spot).
-        line(-hw + 0.14, 0.12, CENTRE_PAINT, false);
+        line(-hw + 0.14, 0.12, MAT_PAINT_YELLOW, false);
         const exitSeg = graph.lanes[C.next[0]!]!.segment;
         const partner = graph.lanes.find((o) => o.kind === 'road' && o.segment === exitSeg && o.toNode === l.toNode && o.index === 0);
         const drawsOwn = partner !== undefined && junctions.free[partner.id] === 1 && mainPath(graph, partner) !== null;
-        if (!drawsOwn) line(-hw - 0.14, 0.12, CENTRE_PAINT, false);
+        if (!drawsOwn) line(-hw - 0.14, 0.12, MAT_PAINT_YELLOW, false);
       }
-      else if (!turns.has('left')) line(-hw + 0.35, 0.16, PAINT, false);
+      else if (!turns.has('left')) line(-hw + 0.35, 0.16, MAT_PAINT, false);
     } else if (!freeLane(l.index - 1)) {
-      line(-hw, 0.14, PAINT, false);
+      line(-hw, 0.14, MAT_PAINT, false);
     }
     // Right side (the divider between two non-stop lanes is drawn by the inner one).
     if (l.index === group.length - 1) {
-      if (!turns.has('right')) line(hw - 0.35, 0.16, PAINT, false);
+      if (!turns.has('right')) line(hw - 0.35, 0.16, MAT_PAINT, false);
     } else {
-      line(hw, 0.14, PAINT, freeLane(l.index + 1));
+      line(hw, 0.14, MAT_PAINT, freeLane(l.index + 1));
     }
   }
 

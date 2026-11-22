@@ -1,7 +1,7 @@
 import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import type { CubicBezier } from '../network/bezier';
-import type { RoadNetwork, RoadSegment } from '../network/network';
+import { CLEARANCE, MAX_GRADE, type RoadNetwork, type RoadSegment, SAME_LEVEL } from '../network/network';
 import { BOUNDARY_TOL, halfWidth, sampleCurve } from './rules';
 
 /** Shortest ring road between neighbouring entries (duplicated from roundabout.ts to avoid a cycle). */
@@ -83,6 +83,7 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
       for (const { p } of pts) {
         if (zoneDistance(zone, p[0], p[2]) > BOUNDARY_TOL + 0.5) return 'Roads must stay inside the construction zone';
       }
+      if (steepest(seg.curve) > MAX_GRADE + 1e-3) return `Too steep: a ramp needs ${Math.round(1 / MAX_GRADE)} m of road per metre of height`;
     }
     const [s0, s1] = net.trimmedRange(seg);
     if (seg.ring !== undefined) {
@@ -143,12 +144,26 @@ export function validate(net: RoadNetwork, zone: Zone, touched: number[], change
           const dx = b[0] - a[0], dz = b[2] - a[2];
           const l2 = dx * dx + dz * dz;
           const u = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[2] - a[2]) * dz) / l2)) : 0;
-          if (Math.hypot(p[0] - a[0] - dx * u, p[2] - a[2] - dz * u) < need) return 'Overlaps another road';
+          if (Math.hypot(p[0] - a[0] - dx * u, p[2] - a[2] - dz * u) >= need) continue;
+          // Over or under each other: fine with enough height between them.
+          const dy = Math.abs(p[1] - (a[1] + (b[1] - a[1]) * u));
+          if (dy >= CLEARANCE) continue;
+          return dy > SAME_LEVEL ? `Not enough height between the roads: ${CLEARANCE} m needed` : 'Overlaps another road';
         }
       }
     }
   }
   return null;
+}
+
+/** Steepest climb along a curve (rise per horizontal metre). */
+export function steepest(c: CubicBezier): number {
+  let max = 0;
+  for (let i = 0; i <= 32; i++) {
+    const d = c.derivative(i / 32), h = Math.hypot(d[0], d[2]);
+    if (h > 1e-6) max = Math.max(max, Math.abs(d[1]) / h);
+  }
+  return max;
 }
 
 /** Do the control-point hulls of two curves come within `pad` of each other (cheap pre-check)? */

@@ -106,6 +106,25 @@ export interface Arm {
 const KERB_ROOM = 3;
 /** Kerb room at a corner next to a small road (lanes, alleys): tighter, slower corners. */
 const KERB_ROOM_SMALL = 1.5;
+/** Road levels (m above the ground): a node's height is its `pos[1]`. */
+export const LEVELS = { tunnel: -8, ground: 0, bridge: 6, high: 12 } as const;
+export type Level = keyof typeof LEVELS;
+/** Height between two road surfaces needed for one to pass over the other (m). */
+export const CLEARANCE = 5;
+/** Steepest a road may climb (rise per horizontal metre). */
+export const MAX_GRADE = 0.1;
+/** Roads closer in height than this at a crossing are on the same level: they form a junction (m). */
+export const SAME_LEVEL = 0.5;
+
+/**
+ * Control points with heights spread evenly between the ends' (`ya` → `yb`), so a road's height
+ * changes steadily along it (a ramp where its ends are on different levels). Their plan
+ * positions are kept.
+ */
+function graded(c1: Vec3, c2: Vec3, ya: number, yb: number): [Vec3, Vec3] {
+  return [[c1[0], ya + (yb - ya) / 3, c1[2]], [c2[0], ya + ((yb - ya) * 2) / 3, c2[2]]];
+}
+
 /** Two roads of different cross-sections within this angle of straight on get a full taper. */
 export const NEAR_STRAIGHT_COS = Math.cos((30 * Math.PI) / 180);
 /** Minimum distance from a junction centre to where a road begins. */
@@ -148,7 +167,7 @@ export class RoadNetwork {
   /** Adds a road from a to b. Omit control points for a straight road. */
   addSegment(a: number, b: number, profile: LaneProfile, c1?: Vec3, c2?: Vec3): number {
     const na = this.node(a), nb = this.node(b);
-    const curve = c1 && c2 ? new CubicBezier(na.pos, c1, c2, nb.pos) : CubicBezier.line(na.pos, nb.pos);
+    const curve = c1 && c2 ? new CubicBezier(na.pos, ...graded(c1, c2, na.pos[1], nb.pos[1]), nb.pos) : CubicBezier.line(na.pos, nb.pos);
     const id = this.nextId++;
     this.segments.set(id, { id, a, b, curve, profile: { ...profile } });
     na.segments.push(id);
@@ -209,7 +228,8 @@ export class RoadNetwork {
   /** Replaces the shape of a road, keeping its end nodes. */
   setCurve(id: number, c1: Vec3, c2: Vec3): void {
     const seg = this.segment(id);
-    seg.curve = new CubicBezier(this.node(seg.a).pos, c1, c2, this.node(seg.b).pos);
+    const A = this.node(seg.a).pos, B = this.node(seg.b).pos;
+    seg.curve = new CubicBezier(A, ...graded(c1, c2, A[1], B[1]), B);
   }
 
   /**

@@ -1,5 +1,5 @@
 import { type Vec3, vec3 } from '../core/math';
-import { type JunctionControl, type LaneProfile, type RoadNetwork, horizontal, rightOf } from '../network/network';
+import { type JunctionControl, type LaneProfile, type RoadNetwork, SAME_LEVEL, horizontal, rightOf } from '../network/network';
 import { roadCost } from './cost';
 import { nearestOnSegment } from './pick';
 import { sampleCurve } from './rules';
@@ -65,6 +65,10 @@ function firstCrossing(net: RoadNetwork, aId: number, skip: Set<number>): { othe
       for (let j = 0; j + 1 < pb.length; j++) {
         const hit = cross2(pa[i]!.p, pa[i + 1]!.p, pb[j]!.p, pb[j + 1]!.p);
         if (!hit) continue;
+        // Different levels pass over each other (validation checks there's room between them).
+        const ya = pa[i]!.p[1] + (pa[i + 1]!.p[1] - pa[i]!.p[1]) * hit[0];
+        const yb = pb[j]!.p[1] + (pb[j + 1]!.p[1] - pb[j]!.p[1]) * hit[1];
+        if (Math.abs(ya - yb) > SAME_LEVEL) continue;
         const s = pa[i]!.s + (pa[i + 1]!.s - pa[i]!.s) * hit[0];
         if (s < 1 || s > A.curve.length - 1 || (best && s >= best.s)) continue;
         best = {

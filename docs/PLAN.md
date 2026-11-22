@@ -107,6 +107,16 @@ Key principles:
 - **Tunnels:** portals and terrain cut, plus an "underground view" toggle (ghost terrain) so tunnels stay editable.
 - **Demo interchanges:** a simple diamond interchange and a cloverleaf.
 - **Verify:** build a two-level crossing; vehicles on each level don't conflict; clearance errors appear when layers are too close.
+- **Decisions (2026-11-22):**
+  - **Fixed levels**, picked with chips in the Build panel: Tunnel −8 m · Ground 0 · Bridge +6 m · High bridge +12 m. Ramps are made automatically where roads of different levels meet.
+  - **Ramps up to 10%** (a 6 m rise takes 60 m; an overpass with both ramps fits in about 140 m of the 200 m zone).
+  - **Demolition:** ramps demolish like ground roads; raised decks only demolish buildings (trees and parks stay underneath); tunnels demolish nothing except at their portals.
+- **Steps:**
+  1. Heights in the road model and traffic: node height is `pos[1]`; a road's height changes evenly between its ends; crossings at different heights pass over each other (no junction); clearance (5 m) and grade (10%) validation; cars on two levels never interact.
+  2. Bridges on screen: deck sides and underside, pillars (instanced), vehicles following the slope.
+  3. Editor: level chips, ramps between levels, picking and editing raised roads; demolition rules.
+  4. Tunnels: portals, a cut in the ground, underground view.
+  5. Demo interchanges: diamond and cloverleaf.
 
 ### 7. Game layer
 - **Level format:** JSON containing the initial network, buildable area, context city seed and overrides, budget, OD demand matrix and time-of-day profile, and objectives.
@@ -257,7 +267,9 @@ _Last updated: 2026-11-21_
   - **Road tool plan complete** (from the Cities: Skylines study): pending roads with ✓/✕, chaining, Straight/Curve/Continuous/Upgrade, guidance labels, guide lines and snapping switch, overlay through buildings, moving junctions, compact panel, drag to remove/upgrade, parallel roads, curvature matching.
 
 ### Next
-- [ ] **6. Elevation: overpasses, bridges, tunnels.**
+- [ ] **6. Elevation: overpasses, bridges, tunnels.** (decisions and steps in the milestone list above)
+  - [x] **Step 1, heights in the road model and traffic (2026-11-22):** `LEVELS` (tunnel −8, ground 0, bridge +6, high +12 m), `CLEARANCE` 5 m, `MAX_GRADE` 10%, `SAME_LEVEL` 0.5 m in `network.ts`. A node's height is `pos[1]` (already saved). Every road's control points take heights spread evenly between its ends (`graded` in `addSegment` / `setCurve`), so a road between levels is a steady ramp; splits keep that. `splitCrossings` ignores crossings more than 0.5 m apart in height (they pass over each other). `validate`: changed roads steeper than 10% are refused ("Too steep: a ramp needs 10 m of road per metre of height", `steepest`); roads close in plan are fine 5 m or more apart in height, refused between 0.5 and 5 m ("Not enough height between the roads"), and overlap as before on the same level. Lanes already follow their road's height, so cars drive up ramps and over decks; they only interact through lanes and junctions, so levels never meet. Tests (`tests/elevation.test.ts`): an overpass (80 m ramps to a 6 m deck over a ground road) builds with no junction and validates; a 3 m deck and a 40 m ramp (15%) are refused, 60 m (10%) is fine; same-level crossings still make junctions; heights survive save/load; 15 minutes of traffic on both levels: no collisions, cars passing over each other, cars on the deck at 6 m. Not visible yet: roads float without supports until step 2, and the editor has no level choice until step 3.
+  - [ ] Step 2: bridges on screen. Step 3: editor. Step 4: tunnels. Step 5: demo interchanges.
 
 ### Known issues / tech debt
 - **Junction sizing:** each road end is trimmed separately (`RoadNetwork.armTrim`), only as far as its neighbours' sidewalk edges require plus 3 m for a rounded kerb (minimum 5 m; straight lane-count tapers keep the long taper). A street crossing an avenue pulls the avenue back only about 9 m, so junctions can be about 24 m apart. Corners are circular fillets. Curved arms follow their real edges (`edgeHit`), but only against their two neighbours.

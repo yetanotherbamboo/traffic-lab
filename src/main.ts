@@ -95,8 +95,10 @@ const overlay = new OverlayBuilder();
 /** Ground point under a screen position (CSS px) and a finger-sized tolerance there, in metres. */
 function ground(x: number, y: number): { p: Vec3; tol: number } | null {
   const r = canvas.getBoundingClientRect();
-  const p = camera.groundHit(((x - r.left) / r.width) * 2 - 1, 1 - ((y - r.top) / r.height) * 2);
+  const nx = ((x - r.left) / r.width) * 2 - 1, ny = 1 - ((y - r.top) / r.height) * 2;
+  const p = camera.groundHit(nx, ny);
   if (!p) return null;
+  editor.aim(camera.ray(nx, ny).dir); // so raised roads are picked where they are seen
   const dist = Math.hypot(p[0] - camera.eye[0], p[1] - camera.eye[1], p[2] - camera.eye[2]);
   const metresPerPx = (2 * dist * Math.tan(camera.fovy / 2)) / r.height;
   return { p, tol: Math.max(1.5, FINGER_PX * metresPerPx) };

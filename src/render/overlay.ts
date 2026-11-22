@@ -34,12 +34,12 @@ export class OverlayBuilder {
     this.count++;
   }
 
-  /** Flat strip from a to b on the ground. */
+  /** Flat strip from a to b, `y` above their (average) height: on the ground, or on a raised road. */
   strip(a: Vec3, b: Vec3, width: number, c: Vec3, y = Y): void {
     const dx = b[0] - a[0], dz = b[2] - a[2];
     const len = Math.hypot(dx, dz);
     if (len < 1e-3) return;
-    this.box((a[0] + b[0]) / 2, y, (a[2] + b[2]) / 2, Math.atan2(-dz, dx), len + width * 0.3, 0.04, width, c);
+    this.box((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + y, (a[2] + b[2]) / 2, Math.atan2(-dz, dx), len + width * 0.3, 0.04, width, c);
   }
 
   /** Strip following a curve between arc lengths s0 and s1, offset sideways by `side` metres. */
@@ -71,7 +71,7 @@ export class OverlayBuilder {
       const h = reverse ? Math.atan2(dz, -dx) : Math.atan2(-dz, dx);
       for (const sgn of [1, -1]) {
         const a = h + sgn * 2.4; // arms sweep back from the tip
-        this.box(x + Math.cos(a) * 0.55, Y, z - Math.sin(a) * 0.55, a, 1.2, 0.04, 0.3, c);
+        this.box(x + Math.cos(a) * 0.55, p[1] + Y, z - Math.sin(a) * 0.55, a, 1.2, 0.04, 0.3, c);
       }
     }
   }
@@ -80,12 +80,12 @@ export class OverlayBuilder {
     const n = Math.max(12, Math.ceil(r * 1.5));
     for (let k = 0; k < n; k++) {
       const a0 = (k / n) * Math.PI * 2, a1 = ((k + 1) / n) * Math.PI * 2;
-      this.strip([p[0] + Math.cos(a0) * r, 0, p[2] + Math.sin(a0) * r], [p[0] + Math.cos(a1) * r, 0, p[2] + Math.sin(a1) * r], width, c, Y + 0.02);
+      this.strip([p[0] + Math.cos(a0) * r, p[1], p[2] + Math.sin(a0) * r], [p[0] + Math.cos(a1) * r, p[1], p[2] + Math.sin(a1) * r], width, c, Y + 0.02);
     }
   }
 
   dot(p: Vec3, size: number, c: Vec3): void {
-    this.box(p[0], Y + 0.03, p[2], Math.PI / 4, size, 0.05, size, c);
+    this.box(p[0], p[1] + Y + 0.03, p[2], Math.PI / 4, size, 0.05, size, c);
   }
 
   /** Outline of a lot rectangle (raised so it shows above lawns). */

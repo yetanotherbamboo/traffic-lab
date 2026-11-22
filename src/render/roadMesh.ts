@@ -1,5 +1,5 @@
 import { type Vec3, vec3 } from '../core/math';
-import { type Arm, NEAR_STRAIGHT_COS, type RoadNetwork, type RoadSegment, horizontal, rightOf } from '../network/network';
+import { type Arm, NEAR_STRAIGHT_COS, type RoadNetwork, type RoadSegment, DECK_DEPTH, SOLID_RAMP, horizontal, rightOf } from '../network/network';
 
 /** Vertex layout: pos(3) normal(3) uv(2) lanes(3: forward, backward, width) material(1). */
 export const ROAD_STRIDE = 12;
@@ -10,10 +10,7 @@ export const MAT_PAINT = 3; // road paint shapes (lane arrows, lines through jun
 export const MAT_PAINT_YELLOW = 4; // yellow road paint (centre lines through junctions)
 export const MAT_CONCRETE = 5; // bridge decks, ramp walls, pillars
 
-/** Thickness of a bridge deck below the road surface (m). */
-const DECK = 1;
-/** Below this height a raised road is a solid ramp (walls down to the ground); above, a deck on pillars (m). */
-const SOLID_RAMP = 3.5;
+const DECK = DECK_DEPTH;
 /** Pillars stand about this far apart under a deck (m). */
 const PILLAR_SPACING = 20;
 const PILLAR = 1.2;

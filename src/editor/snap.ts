@@ -1,7 +1,7 @@
 import type { Vec3 } from '../core/math';
 import type { Zone } from '../env/zone';
 import { type RoadNetwork, horizontal } from '../network/network';
-import { pickAt } from './pick';
+import { lift, pickAt } from './pick';
 import { nodeConnectable, segmentEditable } from './rules';
 
 /** Where a new road starts or ends. */
@@ -70,16 +70,16 @@ function guideRays(net: RoadNetwork, p: Vec3, skip?: Vec3): Ray[] {
 function onRay(r: Ray, p: Vec3): { q: Vec3; dist: number } {
   const t = (p[0] - r.o[0]) * r.d[0] + (p[2] - r.o[2]) * r.d[2];
   if (t < 1) return { q: p, dist: Infinity };
-  const q: Vec3 = [r.o[0] + r.d[0] * t, 0, r.o[2] + r.d[2] * t];
+  const q: Vec3 = [r.o[0] + r.d[0] * t, p[1], r.o[2] + r.d[2] * t];
   return { q, dist: Math.hypot(q[0] - p[0], q[2] - p[2]) };
 }
 
 /** Where two lines cross (each through `o` along `d`), or null if nearly parallel. */
-function cross(ao: Vec3, ad: Vec3, bo: Vec3, bd: Vec3): Vec3 | null {
+function cross(ao: Vec3, ad: Vec3, bo: Vec3, bd: Vec3, y = 0): Vec3 | null {
   const den = ad[0] * bd[2] - ad[2] * bd[0];
   if (Math.abs(den) < 0.17) return null; // under ~10°
   const t = ((bo[0] - ao[0]) * bd[2] - (bo[2] - ao[2]) * bd[0]) / den;
-  return [ao[0] + ad[0] * t, 0, ao[2] + ad[2] * t];
+  return [ao[0] + ad[0] * t, y, ao[2] + ad[2] * t];
 }
 
 /**
@@ -94,13 +94,13 @@ function snapToGuides(net: RoadNetwork, p: Vec3, tol: number, o?: Vec3, dir?: Ve
   const g1 = near[0];
   if (!g1) return null;
   for (const g2 of near.slice(1)) {
-    const x = cross(g1.r.o, g1.r.d, g2.r.o, g2.r.d);
+    const x = cross(g1.r.o, g1.r.d, g2.r.o, g2.r.d, p[1]);
     if (x && Math.hypot(x[0] - p[0], x[2] - p[2]) < tol && onRay(g1.r, x).dist < 0.01 && onRay(g2.r, x).dist < 0.01) {
       return { pos: x, guides: [[g1.r.o, x], [g2.r.o, x]] };
     }
   }
   if (o && dir) {
-    const x = cross(o, dir, g1.r.o, g1.r.d);
+    const x = cross(o, dir, g1.r.o, g1.r.d, p[1]);
     if (x && Math.hypot(x[0] - p[0], x[2] - p[2]) < tol && onRay(g1.r, x).dist < 0.01) return { pos: x, guides: [[g1.r.o, x]] };
   }
   return { pos: g1.q, guides: [[g1.r.o, g1.q]] };
@@ -111,15 +111,28 @@ function armAngles(net: RoadNetwork, nodeId: number): number[] {
   return net.arms(nodeId).map((a) => a.angle);
 }
 
+/** Where the finger is: the ground point under it, how the camera looks through it, and the level. */
+export interface Aim {
+  /** Direction of the line of sight (towards the ground); straight down if omitted. */
+  look?: Vec3;
+  /** Height (m) of the level being built on: free points are placed there. */
+  y?: number;
+}
+
 /**
  * Snaps a ground point for road drawing: to a connectable node, else onto an editable road (a new
  * junction there), else a free point. A free end is aligned to 15° steps relative to the world
- * axes and to the roads at the start, and its length is rounded to whole metres.
+ * axes and to the roads at the start, and its length is rounded to whole metres. Nodes and roads
+ * on the level being built on (`aim.y`) win over others under the finger; free points are placed
+ * at that level, where the line of sight meets it.
  */
-export function snapPoint(net: RoadNetwork, zone: Zone, p: Vec3, tol: number, from?: Anchor, snapping = true): Snap {
+export function snapPoint(net: RoadNetwork, zone: Zone, p: Vec3, tol: number, from?: Anchor, snapping = true, aim: Aim = {}): Snap {
+  const y = aim.y ?? 0;
   const pick = pickAt(net, p, tol, {
     node: (id) => nodeConnectable(net, zone, id),
     segment: (id) => segmentEditable(net, zone, net.segment(id)),
+    look: aim.look,
+    prefer: y,
   });
   if (pick?.kind === 'node') return { anchor: { kind: 'node', id: pick.id, pos: pick.pos }, aligned: false, guides: [] };
   if (pick?.kind === 'segment') {
@@ -133,12 +146,12 @@ export function snapPoint(net: RoadNetwork, zone: Zone, p: Vec3, tol: number, fr
     return { anchor: { kind: 'segment', id: pick.id, t: pick.t, pos: pick.pos }, aligned: false, guides: [] };
   }
 
-  const pos: Vec3 = [p[0], 0, p[2]];
+  const pos = lift(p, y, aim.look);
   const free = (q: Vec3, aligned = false, guides: [Vec3, Vec3][] = []): Snap => ({ anchor: { kind: 'free', pos: q }, aligned, guides });
   if (!snapping) return free(pos);
   if (!from) {
     const g = snapToGuides(net, pos, tol);
-    return g ? free(g.pos, false, g.guides) : free([Math.round(pos[0]), 0, Math.round(pos[2])]);
+    return g ? free(g.pos, false, g.guides) : free([Math.round(pos[0]), y, Math.round(pos[2])]);
   }
 
   const o = from.pos;
@@ -163,15 +176,16 @@ export function snapPoint(net: RoadNetwork, zone: Zone, p: Vec3, tol: number, fr
   const g = snapToGuides(net, pos, tol, o, aligned ? [Math.cos(best), 0, Math.sin(best)] : undefined);
   if (g) return free(g.pos, aligned, g.guides);
   const L = Math.round(len);
-  return free([o[0] + Math.cos(best) * L, 0, o[2] + Math.sin(best) * L], aligned);
+  return free([o[0] + Math.cos(best) * L, y, o[2] + Math.sin(best) * L], aligned);
 }
 
 /**
  * Snaps a point that isn't joining anything (a junction being moved): onto guide lines from other
  * nodes (not from `skip`, its own position), else to whole metres. `snapping` off: as it is.
+ * The point keeps `skip`'s height, found where the line of sight (`look`) meets it.
  */
-export function snapFree(net: RoadNetwork, p: Vec3, tol: number, skip: Vec3, snapping = true): { pos: Vec3; guides: [Vec3, Vec3][] } {
-  const pos: Vec3 = [p[0], 0, p[2]];
+export function snapFree(net: RoadNetwork, p: Vec3, tol: number, skip: Vec3, snapping = true, look?: Vec3): { pos: Vec3; guides: [Vec3, Vec3][] } {
+  const pos = lift(p, skip[1], look);
   if (!snapping) return { pos, guides: [] };
-  return snapToGuides(net, pos, tol, skip) ?? { pos: [Math.round(pos[0]), 0, Math.round(pos[2])], guides: [] };
+  return snapToGuides(net, pos, tol, skip) ?? { pos: [Math.round(pos[0]), pos[1], Math.round(pos[2])], guides: [] };
 }

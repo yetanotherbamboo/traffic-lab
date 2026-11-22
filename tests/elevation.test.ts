@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../src/core/math';
-import { addRoad } from '../src/editor/ops';
+import { type City, type CityItem, itemsHitByRoads } from '../src/env/city';
+import { Editor } from '../src/editor/editor';
+import { addRoad, rampLength } from '../src/editor/ops';
+import { TEST_SEED, TEST_ZONE, buildTestNetwork, testSpawners } from '../src/game/testScene';
+import { World } from '../src/game/world';
 import { validate } from '../src/editor/validate';
 import type { Zone } from '../src/env/zone';
 import { CLEARANCE, LEVELS, type LaneProfile, RoadNetwork } from '../src/network/network';
@@ -133,5 +137,105 @@ describe('bridges on screen', () => {
     const net = new RoadNetwork();
     addRoad(net, at(-50, 0, 0), at(50, 0, 0), STREET);
     expect(concrete(net).length).toBe(0);
+  });
+});
+
+describe('building on levels in the editor', () => {
+  const world = () => new World(buildTestNetwork(), TEST_ZONE, TEST_SEED, testSpawners);
+  const node = (w: World, x: number, z: number) => [...w.net.nodes.values()].find((n) => Math.hypot(n.pos[0] - x, n.pos[2] - z) < 0.01);
+  /** Road tool: drag from a to b (ground points, finger 1.5 m) and press ✓. Returns the error, if any. */
+  const draw = (ed: Editor, a: Vec3, b: Vec3): string | null => {
+    ed.down(a, 1.5);
+    ed.move(b, 1.5);
+    ed.up();
+    const err = ed.confirm();
+    ed.discard();
+    return err;
+  };
+  /** Two ground stubs on x = -60 (the arterial runs along z = 0), ending at z = ∓gap/2. */
+  const stubs = (gap: number) => {
+    const w = world(), ed = new Editor(w);
+    ed.setTool('road');
+    ed.setPreset(0);
+    expect(draw(ed, [-60, 0, -95], [-60, 0, -gap / 2])).toBeNull();
+    expect(draw(ed, [-60, 0, gap / 2], [-60, 0, 95])).toBeNull();
+    return { w, ed };
+  };
+  const onLine = (w: World) => [...w.net.segments.values()].filter((s) => Math.abs(s.curve.p0[0] + 60) < 0.01 && Math.abs(s.curve.p3[0] + 60) < 0.01);
+
+  it('a Bridge road between two ground roads gets a ramp at each end and passes over the arterial', () => {
+    const { w, ed } = stubs(170);
+    ed.setLevel('bridge');
+    expect(draw(ed, [-60, 0, -85], [-60, 0, 85])).toBeNull();
+    // Stub, ramp up, deck, ramp down, stub: no junction where it passes over the arterial.
+    const roads = onLine(w).sort((a, b) => a.curve.p0[2] - b.curve.p0[2]);
+    expect(roads.length).toBe(5);
+    const heights = roads.map((s) => [s.curve.p0[1], s.curve.p3[1]]);
+    expect(heights).toEqual([[0, 0], [0, LEVELS.bridge], [LEVELS.bridge, LEVELS.bridge], [LEVELS.bridge, 0], [0, 0]]);
+    expect(roads[1]!.curve.length).toBeCloseTo(rampLength(LEVELS.bridge), 0);
+    expect(node(w, -60, 0)).toBeUndefined();
+  });
+
+  it('refuses a Bridge road too short for its ramps, and builds it on the ground', () => {
+    const { w, ed } = stubs(100);
+    ed.setLevel('bridge');
+    expect(draw(ed, [-60, 0, -50], [-60, 0, 50])).toMatch(/^Too short for this level: the ramps need 124 m/);
+    ed.setLevel('ground');
+    expect(draw(ed, [-60, 0, -50], [-60, 0, 50])).toBeNull();
+    expect(node(w, -60, 0)?.segments.length).toBe(4); // a crossroads with the arterial
+  });
+
+  it('a road ending on open ground ends at the chosen level; chaining carries on up there', () => {
+    const { w, ed } = stubs(170);
+    ed.setLevel('high');
+    ed.down([-60, 0, -85], 1.5);
+    ed.move([-60, 0, 60], 1.5);
+    ed.up();
+    expect(ed.confirm()).toBeNull();
+    expect(node(w, -60, 60)!.pos[1]).toBe(LEVELS.high);
+    // The ramp's top (its length is measured along the slope, a little more than in plan).
+    const top = [...w.net.nodes.values()].find((n) => Math.abs(n.pos[0] + 60) < 0.01 && Math.abs(n.pos[2] - (-85 + rampLength(LEVELS.high))) < 1);
+    expect(top?.pos[1]).toBe(LEVELS.high);
+    // Chained on at the same level: no second ramp, the deck carries on.
+    ed.tap([-30, 0, 60], 1.5);
+    expect(ed.confirm()).toBeNull();
+    expect(node(w, -30, 60)!.pos[1]).toBe(LEVELS.high);
+  });
+
+  it('picks a raised road where it is seen on screen, and the top one where they overlap', () => {
+    const { w, ed } = stubs(170);
+    ed.setLevel('bridge');
+    expect(draw(ed, [-60, 0, -85], [-60, 0, 85])).toBeNull();
+    ed.setTool('select');
+    const picked = (p: Vec3) => {
+      ed.tap(p, 1.5);
+      const s = ed.selection;
+      return s?.kind === 'segment' ? w.net.segment(s.id).curve.point(0.5)[1] : null;
+    };
+    // From straight above: the arterial beside the deck, the deck where both are under the finger.
+    expect(picked([-50, 0, 0])).toBe(0);
+    expect(picked([-62, 0, 0])).toBe(LEVELS.bridge);
+    // Looking east at 45°: the deck (6 m up) appears 6 m further east, over the arterial.
+    const s = Math.SQRT1_2;
+    ed.aim([s, -s, 0]);
+    expect(picked([-50, 0, 0])).toBe(LEVELS.bridge);
+    expect(picked([-44, 0, 0])).toBe(0);
+  });
+
+  it('bridge decks spare trees and parks that fit underneath, not buildings; ramps take everything', () => {
+    const { net } = overpass(); // deck at 6 m for |z| < 70, ramps out to |z| = 150, along x = 0
+    const item = (id: number, kind: CityItem['kind'], z: number, top: number): CityItem => ({
+      id, kind, x: 0, z, r: 1.5, top, ranges: [], shadow: { start: 0, count: 0 },
+      lot: kind === 'tree' ? null : { cx: 0, cz: z, hx: 6, hz: 6, angle: 0, kind, inZone: true },
+    });
+    const items = [
+      item(0, 'tree', -40, 4), // small tree under the deck: stays
+      item(1, 'tree', -40, 7), // tall tree would poke through the deck
+      item(2, 'house', 40, 6),
+      item(3, 'park', 30, 3),
+      item(4, 'tree', -140, 4), // on the low part of the ramp
+    ];
+    const city = { items } as unknown as City;
+    expect(itemsHitByRoads(city, net, ZONE).sort()).toEqual([1, 2, 4]);
   });
 });

@@ -1,6 +1,6 @@
 import type { Vec3 } from '../core/math';
 import { Rng } from '../core/rng';
-import { type RoadNetwork, horizontal, rightOf } from '../network/network';
+import { DECK_DEPTH, type RoadNetwork, SOLID_RAMP, horizontal, rightOf } from '../network/network';
 import { PALETTE, SUN_DIR } from './style';
 import { type Zone, contextDistance, zoneDistance } from './zone';
 
@@ -82,6 +82,11 @@ interface Corridor {
   raR: number;
   raL: number;
   seg: number;
+  /**
+   * Height (m) of the deck's underside where the road is a deck (above `SOLID_RAMP`), else
+   * -Infinity: trees and parks lower than that stay underneath.
+   */
+  under: number;
 }
 
 function distToSegment(px: number, pz: number, c: Corridor): number {
@@ -94,10 +99,16 @@ function distToSegment(px: number, pz: number, c: Corridor): number {
 /** 'roads' = road corridors incl. sidewalks, 'asphalt' = carriageways only, 'junctions' = junction areas. */
 export type MaskPart = 'all' | 'roads' | 'asphalt' | 'junctions';
 
+/** Room between the ground and a road deck at height `y`, less a little air; -Infinity where the road isn't a deck. */
+function deckUnderside(y: number): number {
+  return y >= SOLID_RAMP ? y - DECK_DEPTH - 0.3 : -Infinity;
+}
+
 /** Answers "is this ground point on a road / junction?" quickly via a spatial hash. */
 class RoadMask {
   private readonly cells = new Map<string, Corridor[]>();
-  private readonly disks: [number, number, number][] = [];
+  /** Junction areas: x, z, radius, and the underside of their deck (see `Corridor.under`). */
+  private readonly disks: [number, number, number, number][] = [];
 
   constructor(net: RoadNetwork, clearance: number) {
     for (const seg of net.segments.values()) {
@@ -108,14 +119,14 @@ class RoadMask {
       let prev = seg.curve.point(0);
       for (let k = 1; k <= n; k++) {
         const p = seg.curve.point(seg.curve.tAtDistance((seg.curve.length * k) / n));
-        this.insert({ ax: prev[0], az: prev[2], bx: p[0], bz: p[2], r, raR, raL, seg: seg.id });
+        this.insert({ ax: prev[0], az: prev[2], bx: p[0], bz: p[2], r, raR, raL, seg: seg.id, under: deckUnderside(Math.min(prev[1], p[1])) });
         prev = p;
       }
     }
     for (const id of net.nodes.keys()) {
       if (net.isJunction(id)) {
         const p = net.node(id).pos;
-        this.disks.push([p[0], p[2], net.junctionRadius(id) + clearance]);
+        this.disks.push([p[0], p[2], net.junctionRadius(id) + clearance, deckUnderside(p[1])]);
       }
     }
   }
@@ -135,14 +146,15 @@ class RoadMask {
 
   /**
    * True if (x,z) is within `extra` metres of road clearance. `ignoreSeg` skips one road; `use`
-   * limits the test to road corridors or junction areas.
+   * limits the test to road corridors or junction areas. Bridge decks only block buildings and
+   * things taller than the space under them: a tree or park whose top is at `top` (m) stays.
    */
-  blocked(x: number, z: number, extra = 0, ignoreSeg = -1, use: MaskPart = 'all'): boolean {
+  blocked(x: number, z: number, extra = 0, ignoreSeg = -1, use: MaskPart = 'all', top = Infinity): boolean {
     if (use !== 'junctions') {
       const list = this.cells.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`);
       if (list) {
         for (const c of list) {
-          if (c.seg === ignoreSeg) continue;
+          if (c.seg === ignoreSeg || top < c.under) continue;
           let reach = c.r;
           if (use === 'asphalt') {
             // Which side of the centreline: right of the direction a → b is (-dz, dx).
@@ -154,7 +166,7 @@ class RoadMask {
       }
     }
     if (use === 'all' || use === 'junctions') {
-      for (const [dx, dz, r] of this.disks) if (Math.hypot(x - dx, z - dz) < r + extra) return true;
+      for (const [dx, dz, r, under] of this.disks) if (top >= under && Math.hypot(x - dx, z - dz) < r + extra) return true;
     }
     return false;
   }
@@ -409,11 +421,11 @@ export function itemsHitByRoads(city: City, net: RoadNetwork, zone: Zone, use: M
       for (let i = 0; i <= 4 && !hit; i++) {
         for (let j = 0; j <= 4 && !hit; j++) {
           const u = (i / 4 - 0.5) * 2 * it.lot.hx, v = (j / 4 - 0.5) * 2 * it.lot.hz;
-          hit = mask.blocked(it.lot.cx + ax[0] * u + az[0] * v, it.lot.cz + ax[1] * u + az[1] * v, -1, -1, use);
+          hit = mask.blocked(it.lot.cx + ax[0] * u + az[0] * v, it.lot.cz + ax[1] * u + az[1] * v, -1, -1, use, it.kind === 'park' ? it.top : Infinity);
         }
       }
       if (hit) out.push(it.id);
-    } else if (mask.blocked(it.x, it.z, 0.5, -1, use)) {
+    } else if (mask.blocked(it.x, it.z, 0.5, -1, use, it.top)) {
       out.push(it.id);
     }
   }

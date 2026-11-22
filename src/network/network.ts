@@ -115,6 +115,10 @@ export const CLEARANCE = 5;
 export const MAX_GRADE = 0.1;
 /** Roads closer in height than this at a crossing are on the same level: they form a junction (m). */
 export const SAME_LEVEL = 0.5;
+/** Below this height a raised road is a solid embankment (walls to the ground); above it a deck on pillars (m). */
+export const SOLID_RAMP = 3.5;
+/** Thickness of a bridge deck below the road surface (m). */
+export const DECK_DEPTH = 1;
 
 /**
  * Control points with heights spread evenly between the ends' (`ya` → `yb`), so a road's height

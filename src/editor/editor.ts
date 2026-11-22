@@ -1,9 +1,9 @@
 import type { Vec3 } from '../core/math';
 import { type Zone, zoneDistance } from '../env/zone';
 import { CubicBezier } from '../network/bezier';
-import { type LaneProfile, type RoadNetwork, horizontal } from '../network/network';
+import { LEVELS, type LaneProfile, type Level, type RoadNetwork, horizontal } from '../network/network';
 import { type EditResult, EditError, addRoad, anchorProblem, bendRoad, deleteRoad, moveNode, touchedAround, upgradeRoad } from './ops';
-import { type Pick, nearestOnSegment, pickAt } from './pick';
+import { type Pick, type PickOptions, lift, nearestOnSegment, pickAt } from './pick';
 import { removeRing, roundaboutAt, tidyRoundabouts } from './roundabout';
 import { nodeConnectable, segmentEditable } from './rules';
 import { type DrawMode, type Shape, bendFrom, bendPoint, bendSpeed, continueShape, curveShape, endDirection, offsetCubic, parallelOffset, straightShape } from './shape';
@@ -11,6 +11,13 @@ import { type Anchor, snapFree, snapPoint } from './snap';
 import { validate } from './validate';
 
 export type Tool = 'view' | 'road' | 'bend' | 'select' | 'delete';
+
+/** Levels the Road tool builds on, in the order the Build panel shows them. */
+export const BUILD_LEVELS: { level: Level; name: string }[] = [
+  { level: 'ground', name: 'Ground' },
+  { level: 'bridge', name: `Bridge ${LEVELS.bridge} m` },
+  { level: 'high', name: `High ${LEVELS.high} m` },
+];
 
 export interface RoadPreset {
   name: string;
@@ -105,6 +112,10 @@ export class Editor {
   private lines: [Vec3, Vec3][] = [];
   /** Draw a pair of roads either side of the drawn line (a dual carriageway for one-way types). */
   parallel = false;
+  /** The level new roads are built on; ramps join them to roads on other levels. */
+  level: Level = 'ground';
+  /** Direction the camera looks through the finger (towards the ground), so raised roads are picked where they are seen. */
+  private look: Vec3 = [0, -1, 0];
   selection: Pick = null;
   draft: Draft | null = null;
   hover: Marker | null = null;
@@ -161,9 +172,37 @@ export class Editor {
     return this.tool === 'road' || this.tool === 'bend' || this.tool === 'delete';
   }
 
+  /**
+   * The host tells the editor how the camera looks through the point it passes next (the unit
+   * direction of the line of sight). Without it the editor assumes a view from straight above.
+   */
+  aim(look: Vec3): void {
+    this.look = look[1] < -1e-3 ? look : [0, -1, 0];
+  }
+
+  /** Height (m) of the level new roads are built on. */
+  get levelY(): number {
+    return LEVELS[this.level];
+  }
+
+  /** Picks the level new roads are built on; the free ends of a road in progress move to it. */
+  setLevel(l: Level): void {
+    this.level = l;
+    this.message = null;
+    const y = this.levelY;
+    if (this.start?.kind === 'free') this.start = { kind: 'free', pos: [this.start.pos[0], y, this.start.pos[2]] };
+    if (this.end?.kind === 'free') this.end = { kind: 'free', pos: [this.end.pos[0], y, this.end.pos[2]] };
+    this.refresh();
+  }
+
+  /** Pick options: see raised roads where they are on screen. */
+  private sight(o: PickOptions = {}): PickOptions {
+    return { ...o, look: this.look };
+  }
+
   /** Snaps a point for the Road tool, remembering the guide lines it used. */
   private snapAt(p: Vec3, tol: number, from?: Anchor): Anchor {
-    const sn = snapPoint(this.net, this.host.zone, p, tol, from, this.snapping);
+    const sn = snapPoint(this.net, this.host.zone, p, tol, from, this.snapping, { look: this.look, y: this.levelY });
     this.lines = sn.guides;
     return this.settle(sn.anchor);
   }
@@ -279,7 +318,7 @@ export class Editor {
     const line = typeof shape === 'string' ? straightShape(a.pos, b.pos) : shape;
     const op = this.parallel
       ? (net: RoadNetwork): EditResult => this.addPair(net, a.pos, b.pos, line, profile)
-      : (net: RoadNetwork): EditResult => addRoad(net, a, b, profile, line);
+      : (net: RoadNetwork): EditResult => addRoad(net, a, b, profile, line, this.levelY);
     this.draft = this.preview(op, markers, err);
     this.draft.grips = grips;
     this.draft.lines = this.lines;
@@ -313,8 +352,8 @@ export class Editor {
     for (const side of [1, -1]) {
       const [q0, q1, q2, q3] = offsetCubic(A, line.c1, line.c2, B, side * d);
       const r = side === 1 || !oneWay
-        ? addRoad(net, at(q0), at(q3), profile, { c1: q1, c2: q2 })
-        : addRoad(net, at(q3), at(q0), profile, { c1: q2, c2: q1 }); // left of a one-way pair: runs back
+        ? addRoad(net, at(q0), at(q3), profile, { c1: q1, c2: q2 }, this.levelY)
+        : addRoad(net, at(q3), at(q0), profile, { c1: q2, c2: q1 }, this.levelY); // left of a one-way pair: runs back
       changed = changed.concat(r.changed);
       touched = touched.concat(r.touched);
       cost += r.cost;
@@ -337,7 +376,7 @@ export class Editor {
       const near = nearestOnSegment(net, seg.id, p[0], p[2]);
       if (near.dist < 0.5 && near.t > 0.001 && near.t < 0.999) return { kind: 'segment', id: seg.id, t: near.t, pos: near.pos };
     }
-    return { kind: 'free', pos: [p[0], 0, p[2]] };
+    return { kind: 'free', pos: [p[0], p[1], p[2]] };
   }
 
   /** Angle (whole degrees) between the new road and the nearest road already at its start. */
@@ -433,7 +472,7 @@ export class Editor {
     }
     if (this.tool === 'road') return this.downRoad(p, tol);
     if (this.tool === 'bend') {
-      const pick = pickAt(this.net, p, tol, { node: this.movable, segment: this.editable });
+      const pick = pickAt(this.net, p, tol, this.sight({ node: this.movable, segment: this.editable }));
       if (pick?.kind === 'node') {
         this.moveId = pick.id;
         this.move(p, tol);
@@ -458,7 +497,10 @@ export class Editor {
    * with only a start, a drag from it pulls out the end; with nothing yet, place the start here.
    */
   private downRoad(p: Vec3, tol: number): boolean {
-    const near = (q: Vec3): number => Math.hypot(q[0] - p[0], q[2] - p[2]);
+    const near = (q: Vec3): number => {
+      const at = lift(p, q[1], this.look);
+      return Math.hypot(q[0] - at[0], q[2] - at[2]);
+    };
     if (this.start && this.end) {
       const grips: ['start' | 'end' | 'bend', Vec3][] = [['start', this.start.pos], ['end', this.end.pos]];
       if (this.drawMode === 'curve') grips.unshift(['bend', bendPoint(this.start.pos, this.end.pos, this.bend)]);
@@ -505,7 +547,8 @@ export class Editor {
         this.chainDir = null; // no longer where the previous road ended
         if (Math.hypot(keep.end[0] - this.start.pos[0], keep.end[2] - this.start.pos[2]) < 1) this.start = { kind: 'free', pos: keep.start };
       } else if (this.grab === 'bend' && this.end) {
-        this.bend = bendFrom(this.start.pos, this.end.pos, [p[0], 0, p[2]]);
+        const mid = (this.start.pos[1] + this.end.pos[1]) / 2;
+        this.bend = bendFrom(this.start.pos, this.end.pos, lift(p, mid, this.look));
       }
       this.refresh();
     } else if (this.sweeping) {
@@ -524,12 +567,13 @@ export class Editor {
       this.changed();
     } else if (this.tool === 'bend' && this.moveId >= 0) {
       const id = this.moveId;
-      const to = snapFree(this.net, p, tol, this.net.node(id).pos, this.snapping);
+      const to = snapFree(this.net, p, tol, this.net.node(id).pos, this.snapping, this.look);
       this.draft = this.preview((net) => moveNode(net, id, to.pos), [{ pos: to.pos, kind: 'handle' }], null);
       this.draft.lines = to.guides;
       this.changed();
     } else if (this.tool === 'bend' && this.bendSeg >= 0) {
-      this.draft = this.preview((net) => bendRoad(net, this.bendSeg, p), [{ pos: [p[0], 0, p[2]], kind: 'handle' }], null);
+      const h = lift(p, this.net.segment(this.bendSeg).curve.point(0.5)[1], this.look);
+      this.draft = this.preview((net) => bendRoad(net, this.bendSeg, h), [{ pos: h, kind: 'handle' }], null);
       this.changed();
     }
   }
@@ -597,7 +641,7 @@ export class Editor {
 
   /** Upgrade mode: the road under the finger takes the chosen type (or a one-way road turns round). */
   private upgradeAt(p: Vec3, tol: number): void {
-    const pick = pickAt(this.net, p, tol, { node: () => false, segment: this.editable });
+    const pick = pickAt(this.net, p, tol, this.sight({ node: () => false, segment: this.editable }));
     if (pick?.kind !== 'segment') {
       this.message = 'Tap a road inside the zone to change it to this type';
       this.changed();
@@ -653,7 +697,7 @@ export class Editor {
   /** Mouse hover (desktop): show where a road would snap, or rubber-band from a placed start. */
   hoverAt(p: Vec3 | null, tol: number): void {
     if (this.tool === 'road' && this.drawMode === 'upgrade') {
-      const pick = p ? pickAt(this.net, p, tol, { node: () => false, segment: this.editable }) : null;
+      const pick = p ? pickAt(this.net, p, tol, this.sight({ node: () => false, segment: this.editable })) : null;
       this.hover = pick?.kind === 'segment' ? { pos: pick.pos, kind: this.net.segment(pick.id).ring === undefined ? 'segment' : 'blocked' } : null;
       this.changed();
       return;
@@ -752,10 +796,10 @@ export class Editor {
         this.changed();
         return;
       }
-      const pick = pickAt(net, p, tol, {
+      const pick = pickAt(net, p, tol, this.sight({
         node: (id) => net.node(id).segments.length >= 3 && nodeConnectable(net, this.host.zone, id),
         segment: this.editable,
-      });
+      }));
       this.selection = pick;
       if (!pick) this.message = 'Tap a road or junction inside the zone';
     } else if (this.tool === 'delete') {
@@ -771,7 +815,7 @@ export class Editor {
   /** The road under a point a sweep can take (editable; Upgrade also skips roundabout rings), or null. */
   private sweepable(p: Vec3, tol: number): number | null {
     const net = this.net, upgrade = this.tool === 'road';
-    const pick = pickAt(net, p, tol, { node: () => false, segment: (id) => this.editable(id) && !(upgrade && net.segment(id).ring !== undefined) });
+    const pick = pickAt(net, p, tol, this.sight({ node: () => false, segment: (id) => this.editable(id) && !(upgrade && net.segment(id).ring !== undefined) }));
     return pick?.kind === 'segment' ? pick.id : null;
   }
 

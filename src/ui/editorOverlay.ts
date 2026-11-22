@@ -16,9 +16,9 @@ function marker(ob: OverlayBuilder, m: Marker, color: Vec3): void {
     ob.ring(m.pos, m.kind === 'handle' ? 1.6 : 2.4, color);
     return;
   }
-  const r = 2.0, [x, , z] = m.pos;
-  ob.strip([x - r, 0, z - r], [x + r, 0, z + r], 0.7, color);
-  ob.strip([x - r, 0, z + r], [x + r, 0, z - r], 0.7, color);
+  const r = 2.0, [x, y, z] = m.pos;
+  ob.strip([x - r, y, z - r], [x + r, y, z + r], 0.7, color);
+  ob.strip([x - r, y, z + r], [x + r, y, z - r], 0.7, color);
 }
 const APPROACH = APPROACH_HEX.map(hexToVec);
 const FORWARD = hexToVec(FORWARD_HEX), BACKWARD = hexToVec(BACKWARD_HEX);
@@ -54,7 +54,8 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
       const len = Math.hypot(b[0] - a[0], b[2] - a[2]);
       for (let s = 1.5; s < len - 0.5; s += 3.5) {
         const t0 = s / len, t1 = Math.min(s + 2, len) / len;
-        ob.strip([a[0] + (b[0] - a[0]) * t0, 0, a[2] + (b[2] - a[2]) * t0], [a[0] + (b[0] - a[0]) * t1, 0, a[2] + (b[2] - a[2]) * t1], 0.55, OVERLAY.guide);
+        const at = (t: number): Vec3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        ob.strip(at(t0), at(t1), 0.55, OVERLAY.guide);
       }
     }
     // Grips of a pending road: a filled dot inside each circle says "drag me".
@@ -96,11 +97,12 @@ export function buildEditorOverlay(ob: OverlayBuilder, ed: Editor, w: World): vo
     const major = w.sim.junctions.control.get(sel.id) === 'priority' ? w.sim.junctions.major.get(sel.id) : undefined;
     w.net.arms(sel.id).forEach((a, i) => {
       const c = APPROACH[i % APPROACH.length]!;
-      const l: Vec3 = [a.end[0] - a.right[0] * a.leftExt, 0, a.end[2] - a.right[2] * a.leftExt];
-      const r: Vec3 = [a.end[0] + a.right[0] * a.rightExt, 0, a.end[2] + a.right[2] * a.rightExt];
+      const y = a.end[1];
+      const l: Vec3 = [a.end[0] - a.right[0] * a.leftExt, y, a.end[2] - a.right[2] * a.leftExt];
+      const r: Vec3 = [a.end[0] + a.right[0] * a.rightExt, y, a.end[2] + a.right[2] * a.rightExt];
       ob.strip(l, r, 1.4, c);
       if (major?.has(a.segment.id)) {
-        ob.strip(a.end, [a.end[0] + a.dir[0] * 14, 0, a.end[2] + a.dir[2] * 14], 0.7, OVERLAY.major);
+        ob.strip(a.end, [a.end[0] + a.dir[0] * 14, y, a.end[2] + a.dir[2] * 14], 0.7, OVERLAY.major);
       }
     });
   }

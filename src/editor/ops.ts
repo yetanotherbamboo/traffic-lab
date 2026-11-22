@@ -1,5 +1,5 @@
 import { type Vec3, vec3 } from '../core/math';
-import { type JunctionControl, type LaneProfile, type RoadNetwork, SAME_LEVEL, horizontal, rightOf } from '../network/network';
+import { type JunctionControl, type LaneProfile, MAX_GRADE, type RoadNetwork, SAME_LEVEL, horizontal, rightOf } from '../network/network';
 import { roadCost } from './cost';
 import { nearestOnSegment } from './pick';
 import { sampleCurve } from './rules';
@@ -173,18 +173,68 @@ export function anchorProblem(net: RoadNetwork, a: Anchor, profile: LaneProfile)
   return TOO_CLOSE;
 }
 
-/** Builds a straight road between two anchors, adding junctions where it crosses other roads. */
-export function addRoad(net: RoadNetwork, start: Anchor, end: Anchor, profile: LaneProfile, shape?: Shape): EditResult {
+/** Ramps are this much longer than the steepest grade allows, so they always pass the grade check. */
+const RAMP_SLACK = 1.03;
+
+/** Length of road (m) a ramp needs to climb `dy` metres. */
+export const rampLength = (dy: number): number => (Math.abs(dy) / MAX_GRADE) * RAMP_SLACK;
+
+/**
+ * Builds a road between two anchors, adding junctions where it crosses other roads. With a
+ * `level` (height in m), the road runs at that height and gets a ramp at each end that joins a
+ * road or junction on another level: the first (or last) `rampLength` metres climb steadily and
+ * a plain joint marks where the ramp meets the level part. Free ends are at the anchors' heights.
+ */
+export function addRoad(net: RoadNetwork, start: Anchor, end: Anchor, profile: LaneProfile, shape?: Shape, level?: number): EditResult {
   const a = resolve(net, start);
   const b = resolve(net, end);
   if (a === b) throw new EditError('Road is too short');
   if (net.node(a).segments.some((s) => net.otherEnd(net.segment(s), a) === b)) throw new EditError('These points are already connected');
   const id = net.addSegment(a, b, profile, shape?.c1, shape?.c2);
   const cost = roadCost(net.segment(id));
-  const changed = splitCrossings(net, [id]);
+  const pieces = level === undefined ? [id] : addRamps(net, id, level);
+  const changed = splitCrossings(net, pieces);
   preferEntrance(net, a);
   preferEntrance(net, b);
   return { changed, touched: touchedAround(net, changed), cost };
+}
+
+/**
+ * Splits road `id` so it runs at height `level` between ramps at the ends that are on another
+ * level (see `addRoad`). Returns the pieces, in order from its start.
+ */
+function addRamps(net: RoadNetwork, id: number, level: number): number[] {
+  const seg = net.segment(id);
+  const ya = net.node(seg.a).pos[1], yb = net.node(seg.b).pos[1];
+  const ra = Math.abs(ya - level) > SAME_LEVEL ? rampLength(ya - level) : 0;
+  const rb = Math.abs(yb - level) > SAME_LEVEL ? rampLength(yb - level) : 0;
+  if (ra === 0 && rb === 0) return [id];
+  const len = seg.curve.length;
+  if (ra + rb > len + 0.5) {
+    throw new EditError(`Too short for this level: the ${ra > 0 && rb > 0 ? 'ramps need' : 'ramp needs'} ${Math.ceil(ra + rb)} m of road (this one is ${Math.floor(len)} m)`);
+  }
+  // A ramp reaching (nearly) the other end needs no level part: the road's steady slope is the ramp.
+  const pieces: number[] = [];
+  let rest = id;
+  const lift = (node: number): void => {
+    net.node(node).pos[1] = level;
+    for (const s of net.node(node).segments) net.setCurve(s, net.segment(s).curve.p1, net.segment(s).curve.p2);
+  };
+  if (ra > 0 && len - ra > 2) {
+    const cut = net.splitSegment(rest, seg.curve.tAtDistance(ra));
+    lift(cut.node);
+    pieces.push(cut.first);
+    rest = cut.second;
+  }
+  const r = net.segment(rest);
+  if (rb > 0 && r.curve.length - rb > 2) {
+    const cut = net.splitSegment(rest, r.curve.tAtDistance(r.curve.length - rb));
+    lift(cut.node);
+    pieces.push(cut.first, cut.second);
+  } else {
+    pieces.push(rest);
+  }
+  return pieces;
 }
 
 /** Does a road at this node leave any of its roads too short? */

@@ -1,5 +1,5 @@
 import { formatMoney } from '../editor/cost';
-import { type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
+import { BUILD_LEVELS, type Editor, ROAD_PRESETS, type Tool } from '../editor/editor';
 import type { DrawMode } from '../editor/shape';
 import type { Vec3 } from '../core/math';
 import { MAX_LANES, setControl, setEntrance, setFreeFlow, setGreen, setLanes, setMajor, setSpeed, setTurns } from '../editor/ops';
@@ -7,7 +7,7 @@ import {
   RING_MAX_LANES, RING_MIN_LANES, convertToRoundabout, outerRadius, removeRoundabout, setRoundaboutLanes, setRoundaboutSize,
 } from '../editor/roundabout';
 import type { World } from '../game/world';
-import { type JunctionControl, TURN_LEFT, TURN_RIGHT, TURN_STRAIGHT } from '../network/network';
+import { type JunctionControl, type RoadSegment, SAME_LEVEL, TURN_LEFT, TURN_RIGHT, TURN_STRAIGHT } from '../network/network';
 import { TURN_BIT } from '../sim/laneGraph';
 import { APPROACH_HEX, BACKWARD_HEX, FORWARD_HEX } from './colors';
 
@@ -66,6 +66,13 @@ function icon(name: string): SVGElement {
 
 const chip = (label: Child, on: boolean, click: () => void, cls = ''): HTMLElement =>
   h('button', { class: `chip ${cls}${on ? ' on' : ''}`, click }, label);
+/** " · bridge 6 m" / " · ramp 0–6 m" for raised roads, nothing on the ground. */
+function levelLabel(seg: RoadSegment): string {
+  const ya = seg.curve.p0[1], yb = seg.curve.p3[1];
+  const m = (y: number): string => `${Math.round(y)}`;
+  if (Math.abs(ya - yb) > SAME_LEVEL) return ` · ramp ${m(Math.min(ya, yb))}–${m(Math.max(ya, yb))} m`;
+  return Math.abs(ya) > SAME_LEVEL ? ` · ${ya > 0 ? 'bridge' : 'tunnel'} ${m(Math.abs(ya))} m` : '';
+}
 const swatch = (hex: string): HTMLElement => h('span', { class: 'sw', style: `background:${hex}` });
 
 /** HTML toolbar, hint/preview line and the panels for changing roads and junctions. */
@@ -121,7 +128,7 @@ export class EditorUI {
     this.renderInfo();
     this.renderTag();
     const sel = ed.selection;
-    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${ed.snapping}|${ed.parallel}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
+    const key = `${ed.tool}|${ed.preset}|${ed.drawMode}|${ed.snapping}|${ed.parallel}|${ed.level}|${sel ? `${sel.kind}${sel.id}` : ''}|${this.world.version}`;
     if (key !== this.panelKey) {
       this.panelKey = key;
       this.renderPanel();
@@ -232,6 +239,10 @@ export class EditorUI {
         ed.drawMode !== 'upgrade' && h('span', { class: 'vsep' }),
         ed.drawMode !== 'upgrade' && chip('Parallel', ed.parallel, () => ed.setParallel(!ed.parallel), 'toggle'),
         ed.drawMode !== 'upgrade' && chip('Snap', ed.snapping, () => ed.setSnapping(!ed.snapping), 'toggle')));
+      // Level: new roads are built at this height, with ramps where they meet other levels.
+      if (ed.drawMode !== 'upgrade') {
+        body.push(h('div', { class: 'row scroll' }, ...BUILD_LEVELS.map((l) => chip(l.name, ed.level === l.level, () => ed.setLevel(l.level)))));
+      }
     } else if (ed.tool === 'select' && sel?.kind === 'segment' && this.world.net.segments.has(sel.id)) {
       body.push(...this.roadPanel(sel.id));
     } else if (ed.tool === 'select' && sel?.kind === 'node' && this.world.net.nodes.has(sel.id)) {
@@ -257,7 +268,7 @@ export class EditorUI {
       h('div', { class: 'row' }, h('span', { class: 'label' }, swatch(hex), ` ${label}`),
         chip('−', false, () => set(n - 1)), h('span', { class: 'num' }, String(n)), chip('+', false, () => set(n + 1)));
     return [
-      h('h3', {}, `Road · ${seg.curve.length.toFixed(0)} m`),
+      h('h3', {}, `Road · ${seg.curve.length.toFixed(0)} m${levelLabel(seg)}`),
       counter(FORWARD_HEX, 'Lanes', f, (k) => k >= 0 && k <= MAX_LANES && this.act((n) => setLanes(n, segId, k, b))),
       counter(BACKWARD_HEX, 'Lanes', b, (k) => k >= 0 && k <= MAX_LANES && this.act((n) => setLanes(n, segId, f, k))),
       h('div', { class: 'row' }, h('span', { class: 'label' }, 'Speed'),

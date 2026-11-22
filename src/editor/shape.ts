@@ -33,7 +33,7 @@ function chordRight(A: Vec3, B: Vec3): Vec3 | null {
 /** The point a curved road passes through halfway: the chord's midpoint pushed `bend` metres to its right. */
 export function bendPoint(A: Vec3, B: Vec3, bend: number): Vec3 {
   const mid = lerp(A, B, 0.5), r = chordRight(A, B);
-  return r ? [mid[0] + r[0] * bend, 0, mid[2] + r[2] * bend] : mid;
+  return r ? [mid[0] + r[0] * bend, mid[1], mid[2] + r[2] * bend] : mid;
 }
 
 /** Signed distance (m) of `p` to the right of the chord A → B: the `bend` that puts the middle at p. */

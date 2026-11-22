@@ -8,6 +8,15 @@ export const MAT_SIDEWALK = 1;
 export const MAT_ASPHALT = 2; // plain asphalt (junction surfaces)
 export const MAT_PAINT = 3; // road paint shapes (lane arrows, lines through junctions)
 export const MAT_PAINT_YELLOW = 4; // yellow road paint (centre lines through junctions)
+export const MAT_CONCRETE = 5; // bridge decks, ramp walls, pillars
+
+/** Thickness of a bridge deck below the road surface (m). */
+const DECK = 1;
+/** Below this height a raised road is a solid ramp (walls down to the ground); above, a deck on pillars (m). */
+const SOLID_RAMP = 3.5;
+/** Pillars stand about this far apart under a deck (m). */
+const PILLAR_SPACING = 20;
+const PILLAR = 1.2;
 
 const LIFT = 0.03; // keeps asphalt above the ground plane (no z-fighting)
 const KERB = 0.15; // sidewalk height
@@ -111,6 +120,92 @@ function addSegment(b: Builder, net: RoadNetwork, seg: RoadSegment): void {
   }
   const { forward: F, backward: B, laneWidth: w, sidewalk: S } = seg.profile;
   b.ribbon(stations, roadColumns(B * w, F * w, S), [F, B, w]);
+  if (stations.some((st) => st.p[1] > 0.05)) addStructure(b, net, seg, stations, -B * w - S, F * w + S);
+}
+
+/** Where a raised road's structure ends below its surface: the ground on a low ramp, else the deck's underside. */
+function underside(y: number): number {
+  return y < SOLID_RAMP ? 0 : y - DECK;
+}
+
+/**
+ * Concrete under a road above the ground: side walls from its outer edges (at `uL` and `uR`) down
+ * to the ground on low ramps or to the deck's underside higher up, the underside itself, and
+ * pillars under the deck, except where another road passes below.
+ */
+function addStructure(b: Builder, net: RoadNetwork, seg: RoadSegment, stations: Station[], uL: number, uR: number): void {
+  const none: Vec3 = [0, 0, 0], down: Vec3 = [0, -1, 0];
+  const base = b.vertexCount();
+  for (const st of stations) {
+    const y = st.p[1], bottom = Math.min(underside(y), y);
+    const at = (u: number, h: number): Vec3 => [st.p[0] + st.right[0] * u, h, st.p[2] + st.right[2] * u];
+    const left = vec3.scale(st.right, -1);
+    // 6 vertices per station: left wall (bottom, top), right wall (top, bottom), underside (right, left).
+    b.push(at(uL, bottom), left, 0, st.v, none, MAT_CONCRETE);
+    b.push(at(uL, y + LIFT), left, 0, st.v, none, MAT_CONCRETE);
+    b.push(at(uR, y + LIFT), st.right, 0, st.v, none, MAT_CONCRETE);
+    b.push(at(uR, bottom), st.right, 0, st.v, none, MAT_CONCRETE);
+    b.push(at(uR, bottom), down, 0, st.v, none, MAT_CONCRETE);
+    b.push(at(uL, bottom), down, 0, st.v, none, MAT_CONCRETE);
+  }
+  // Same winding rule as `ribbon`: each pair of columns, ordered so its strip faces outward.
+  for (let s = 0; s + 1 < stations.length; s++) {
+    for (let c = 0; c < 6; c += 2) {
+      const a = base + s * 6 + c, bb = a + 1, d = a + 6, e = d + 1;
+      b.i.push(a, bb, d, bb, e, d);
+    }
+  }
+
+  // Pillars, evenly spaced along the deck (not on solid ramp parts or over roads below).
+  const width = uR - uL;
+  const across = Math.min(Math.max(width * 0.45, PILLAR), 7);
+  const len = stations[stations.length - 1]!.v - stations[0]!.v;
+  const count = Math.max(1, Math.round(len / PILLAR_SPACING));
+  for (let k = 0; k < count; k++) {
+    const target = stations[0]!.v + (len * (k + 0.5)) / count;
+    const st = stations.reduce((best, x) => (Math.abs(x.v - target) < Math.abs(best.v - target) ? x : best));
+    const top = underside(st.p[1]);
+    if (st.p[1] < SOLID_RAMP || top < 0.5) continue;
+    const c: Vec3 = [st.p[0] + st.right[0] * (uL + uR) / 2, 0, st.p[2] + st.right[2] * (uL + uR) / 2];
+    if (roadBelow(net, seg, c, across / 2 + 0.5, st.p[1])) continue;
+    pillar(b, c, st.right, across, PILLAR, top);
+  }
+}
+
+/** Does another road lower than `y` pass within `reach` (plus its own half width) of the ground point `c`? */
+function roadBelow(net: RoadNetwork, seg: RoadSegment, c: Vec3, reach: number, y: number): boolean {
+  for (const o of net.segments.values()) {
+    if (o.id === seg.id) continue;
+    const { forward: f, backward: bk, laneWidth: w, sidewalk: sw } = o.profile;
+    const half = Math.max(f, bk) * w + sw;
+    const n = Math.max(2, Math.ceil(o.curve.length / 2));
+    for (let i = 0; i <= n; i++) {
+      const p = o.curve.point(i / n);
+      if (p[1] < y - 0.5 && Math.hypot(p[0] - c[0], p[2] - c[2]) < half + reach) return true;
+    }
+  }
+  return false;
+}
+
+/** A box pillar on the ground at `c`, `across` wide along `right`, `along` deep, `h` tall (sides only). */
+function pillar(b: Builder, c: Vec3, right: Vec3, across: number, along: number, h: number): void {
+  const fwd: Vec3 = [-right[2], 0, right[0]]; // right turned back to the road's direction
+  const none: Vec3 = [0, 0, 0];
+  const corner = (su: number, sf: number, y: number): Vec3 =>
+    [c[0] + right[0] * su * across / 2 + fwd[0] * sf * along / 2, y, c[2] + right[2] * su * across / 2 + fwd[2] * sf * along / 2];
+  // Four faces; each quad's corners go bottom → bottom → top → top, so its triangles are listed
+  // in the order that makes them counter-clockwise seen from outside.
+  const faces: [number, number, number, number, Vec3][] = [
+    [1, -1, 1, 1, right], [-1, 1, -1, -1, vec3.scale(right, -1)], [1, 1, -1, 1, fwd], [-1, -1, 1, -1, vec3.scale(fwd, -1)],
+  ];
+  for (const [u0, f0, u1, f1, n] of faces) {
+    const i = b.vertexCount();
+    b.push(corner(u0, f0, 0), n, 0, 0, none, MAT_CONCRETE);
+    b.push(corner(u1, f1, 0), n, 0, 0, none, MAT_CONCRETE);
+    b.push(corner(u1, f1, h), n, 0, 0, none, MAT_CONCRETE);
+    b.push(corner(u0, f0, h), n, 0, 0, none, MAT_CONCRETE);
+    b.i.push(i, i + 2, i + 1, i, i + 3, i + 2);
+  }
 }
 
 /** Intersection of lines p + s*dp and q + t*dq on the XZ plane; returns [s, t] or null if parallel. */

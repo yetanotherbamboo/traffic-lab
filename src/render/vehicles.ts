@@ -2,6 +2,8 @@ import { KIND_VAN, KIND_VEHICLE, LIT_STRIDE } from '../env/city';
 import { PALETTE } from '../env/style';
 import { POSE_STRIDE, type TrafficSim } from '../sim/traffic';
 
+const rear = new Float32Array(4);
+
 function lerpAngle(a: number, b: number, t: number): number {
   let d = b - a;
   if (d > Math.PI) d -= Math.PI * 2;
@@ -35,7 +37,11 @@ export function writeVehicleInstances(
     const h = lerpAngle(p0[k + 3]!, p1[k + 3]!, alpha);
     const half = sim.length[i]! / 2;
     d[o] = p0[k]! + (p1[k]! - p0[k]!) * alpha - Math.cos(h) * half;
-    d[o + 1] = p0[k + 1]! + (p1[k + 1]! - p0[k + 1]!) * alpha;
+    // On a ramp the body sits between its front and rear heights (the model doesn't tilt).
+    const lane = sim.graph.lanes[sim.lane[i]!]!;
+    lane.path.sample(sim.s[i]! - sim.length[i]!, rear);
+    const front = p0[k + 1]! + (p1[k + 1]! - p0[k + 1]!) * alpha;
+    d[o + 1] = front + (rear[1]! - p1[k + 1]!) / 2;
     d[o + 2] = p0[k + 2]! + (p1[k + 2]! - p0[k + 2]!) * alpha + Math.sin(h) * half;
     d[o + 3] = h;
     d[o + 4] = sim.length[i]!;

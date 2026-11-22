@@ -4,6 +4,7 @@ import { addRoad } from '../src/editor/ops';
 import { validate } from '../src/editor/validate';
 import type { Zone } from '../src/env/zone';
 import { CLEARANCE, LEVELS, type LaneProfile, RoadNetwork } from '../src/network/network';
+import { MAT_CONCRETE, ROAD_STRIDE, buildRoadMesh } from '../src/render/roadMesh';
 import { LaneGraph } from '../src/sim/laneGraph';
 import { type Spawner, TrafficSim } from '../src/sim/traffic';
 
@@ -94,5 +95,43 @@ describe('roads on different levels', () => {
     expect(passes).toBeGreaterThan(0); // they did cross paths, on different levels
     expect(onDeck).toBeGreaterThan(0);
     expect(sim.stats.exited).toBeGreaterThan(200);
+  });
+});
+
+describe('bridges on screen', () => {
+  const concrete = (net: RoadNetwork) => {
+    const m = buildRoadMesh(net), V = m.vertices, I = m.indices, S = ROAD_STRIDE;
+    const tris: { a: Vec3; b: Vec3; c: Vec3; n: Vec3 }[] = [];
+    for (let t = 0; t < I.length; t += 3) {
+      const [i, j, k] = [I[t]!, I[t + 1]!, I[t + 2]!];
+      if (Math.round(V[i * S + 11]!) !== MAT_CONCRETE) continue;
+      const p = (q: number): Vec3 => [V[q * S]!, V[q * S + 1]!, V[q * S + 2]!];
+      tris.push({ a: p(i), b: p(j), c: p(k), n: [V[i * S + 3]!, V[i * S + 4]!, V[i * S + 5]!] });
+    }
+    return tris;
+  };
+
+  it('raised roads get concrete walls, an underside and pillars, all facing outwards', () => {
+    const { net } = overpass();
+    const tris = concrete(net);
+    expect(tris.length).toBeGreaterThan(100);
+    for (const { a, b, c, n } of tris) {
+      const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      const g = [e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!];
+      const area = Math.hypot(g[0]!, g[1]!, g[2]!);
+      if (area < 1e-6) continue; // zero-height wall where a ramp meets the ground
+      expect((g[0]! * n[0] + g[1]! * n[1] + g[2]! * n[2]) / area).toBeGreaterThan(0.5);
+    }
+    // Pillars stand on the ground under the deck, but not on the road passing below.
+    const feet = tris.filter((t) => [t.a, t.b, t.c].some((p) => Math.abs(p[1]) < 1e-6) && Math.abs(t.n[1]) < 1e-6);
+    const pillarFeet = feet.filter((t) => [t.a, t.b, t.c].every((p) => Math.abs(p[0]) < 5));
+    expect(pillarFeet.some((t) => Math.abs(t.a[2]) > 20)).toBe(true);
+    expect(pillarFeet.every((t) => [t.a, t.b, t.c].every((p) => Math.abs(p[2]) > 8))).toBe(true);
+  });
+
+  it('roads on the ground get no concrete', () => {
+    const net = new RoadNetwork();
+    addRoad(net, at(-50, 0, 0), at(50, 0, 0), STREET);
+    expect(concrete(net).length).toBe(0);
   });
 });
